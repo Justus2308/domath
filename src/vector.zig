@@ -271,12 +271,18 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
         }
 
+        // Using `@select` here to effectively perform a bitwise and is a rather
+        // unfortunate result of https://github.com/ziglang/zig/issues/14306,
+        // but codegen seems to be fine anyways.
+
         pub fn eql(v_in: Vectors, w_in: Vectors, noalias out: *[vectors_per_op]bool) void {
             var res: @Vector(vectors_per_op, bool) = @splat(true);
             for (v_in, w_in) |vec1, vec2| {
                 const opv1: OpVec = vec1.*;
                 const opv2: OpVec = vec2.*;
-                res = (res and (opv1 == opv2));
+
+                const pred = (opv1 == opv2);
+                res = @select(bool, pred, res, pred);
             }
             out.* = res;
         }
@@ -293,12 +299,14 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
         fn approxEqAbsFloat(v_in: Vectors, w_in: Vectors, tolerances_in: Scalars, noalias out: *[vectors_per_op]bool) void {
             assert(@reduce(.Min, tolerances_in) >= 0.0);
 
-            var res: @Vector(vectors_per_op, bool) = @splat(true);
+            var res: @Vector((vectors_per_op / 8), u8) = @splat(@intFromBool(true));
             for (v_in, w_in, tolerances_in) |vec1, vec2, tolerance| {
                 const opv1: OpVec = vec1.*;
                 const opv2: OpVec = vec2.*;
                 const optol: OpVec = tolerance.*;
-                res = (res and @abs(opv1 - opv2) <= optol);
+
+                const pred = (@abs(opv1 - opv2) <= optol);
+                res = @select(bool, pred, res, pred);
             }
             out.* = res;
         }
@@ -312,7 +320,8 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
                 const optol: OpVec = tolerance.*;
 
                 const rel_tolerance = (@max(@abs(opv1), @abs(opv2)) * optol);
-                res = (res and @abs(opv1 - opv2) <= rel_tolerance);
+                const pred = (@abs(opv1 - opv2) <= rel_tolerance);
+                res = @select(bool, pred, res, pred);
             }
             out.* = res;
         }
@@ -354,6 +363,26 @@ test "lenghts" {
             }
             const length = @sqrt(len_sqrd);
             try testing.expectEqual(length, val);
+        }
+    }
+}
+
+test "eql" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+        const Batch = [ns.vectors_per_op]f32;
+        const buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32));
+        const in1 = slices(len, Batch, &buf1);
+        const buf2: [len]Batch = @splat(iota(ns.vectors_per_op / 2, f32) ++ iota(ns.vectors_per_op / 2, f32));
+        const in2 = slices(len, Batch, &buf2);
+        var out: [ns.vectors_per_op]bool = undefined;
+        ns.eql(in1, in2, &out);
+
+        for (0..(ns.vectors_per_op / 2)) |i| {
+            try testing.expectEqual(true, out[i]);
+        }
+        for ((ns.vectors_per_op / 2)..ns.vectors_per_op) |i| {
+            try testing.expectEqual(false, out[i]);
         }
     }
 }
