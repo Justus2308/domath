@@ -260,7 +260,14 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             const dists = @sqrt(dists_sqrd);
 
             const max_dists: OpVec = max_dist_in.*;
-            const is_at_target = (dists == zeroes_vec or (max_dists >= zeroes_vec and dists <= max_dists));
+
+            const pred_and1 = (max_dists >= zeroes_vec);
+            const pred_and2 = (dists <= max_dists);
+
+            const pred_or1 = (dists == zeroes_vec);
+            const pred_or2 = @select(bool, pred_and1, pred_and2, pred_and1); // and
+
+            const is_at_target = @select(bool, pred_or1, pred_or1, pred_or2); // or
 
             for (v_in, target_in, out) |vec_in, target, vec_out| {
                 const opvec: OpVec = vec_in.*;
@@ -331,10 +338,10 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
     };
 }
 
-inline fn iota(comptime len: usize, comptime T: type) [len]T {
+inline fn iota(comptime len: usize, comptime T: type, comptime offset: usize, comptime stride: usize) [len]T {
     var arr: [len]T = undefined;
     inline for (0..len) |i| {
-        const raw = @as(comptime_int, i);
+        const raw = @as(comptime_int, ((i * stride) + offset));
         arr[i] = raw;
     }
     return arr;
@@ -346,12 +353,21 @@ inline fn slices(comptime len: usize, comptime T: type, buf: *const [len]T) *con
     }
     return &arr;
 }
+inline fn slicesMut(comptime len: usize, comptime T: type, buf: *[len]T) *const [len]*T {
+    var arr: [len]*T = undefined;
+    for (0..len) |i| {
+        arr[i] = &buf[i];
+    }
+    return &arr;
+}
+
+// TESTS
 
 test "lenghts" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
         const Batch = [ns.vectors_per_op]f32;
-        const buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32));
+        const buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
         const in = slices(len, Batch, &buf);
         var out: Batch = undefined;
         ns.lengths(in, &out);
@@ -367,13 +383,163 @@ test "lenghts" {
     }
 }
 
+test "normalize + scale roundtrip" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+        const Batch = [ns.vectors_per_op]f32;
+        const buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 3));
+        const in = slices(len, Batch, &buf);
+        var normed_buf: [len]Batch = undefined;
+        var scaled_buf: [len]Batch = undefined;
+        const normed = slicesMut(len, Batch, &normed_buf);
+        const scaled = slicesMut(len, Batch, &scaled_buf);
+        var lengths: Batch = undefined;
+
+        ns.normalize(in, normed);
+        ns.lengths(in, &lengths);
+        ns.scale(normed, &lengths, scaled);
+
+        for (buf, scaled_buf) |orig, result| {
+            for (orig, result) |a, b| {
+                try testing.expectApproxEqAbs(a, b, 0.01);
+            }
+        }
+    }
+}
+
+test "distances" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+        const Batch = [ns.vectors_per_op]f32;
+        var buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 3));
+        var buf2: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 2));
+        const in1 = slices(len, Batch, &buf1);
+        const in2 = slices(len, Batch, &buf2);
+        var out: Batch = undefined;
+        ns.distances(in1, in2, &out);
+
+        for (out, 0..) |val, i| {
+            var dist_sqrd: f32 = 0;
+            for (0..len) |j| {
+                dist_sqrd += (buf1[j][i] - buf2[j][i]) * (buf1[j][i] - buf2[j][i]);
+            }
+            try testing.expectEqual(@sqrt(dist_sqrd), val);
+        }
+    }
+}
+
+test "dots" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+        const Batch = [ns.vectors_per_op]f32;
+        const buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in1 = slices(len, Batch, &buf1);
+        const buf2: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+        const in2 = slices(len, Batch, &buf2);
+        var out: Batch = undefined;
+        ns.dots(in1, in2, &out);
+
+        for (out, 0..) |val, i| {
+            var expected: f32 = 0;
+            for (buf1, buf2) |vec1, vec2| {
+                expected += (vec1[i] * vec2[i]);
+            }
+            try testing.expectEqual(expected, val);
+        }
+    }
+}
+
+test "cross 2D" {
+    const len = 2;
+    const ns = namespace(len, f32);
+    const Batch = [ns.vectors_per_op]f32;
+    var buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+    var buf2: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+    const in1 = slices(len, Batch, &buf1);
+    const in2 = slices(len, Batch, &buf2);
+    var out: Batch = undefined;
+    ns.cross(in1, in2, &out);
+
+    for (0..ns.vectors_per_op) |i| {
+        const vx = buf1[0][i];
+        const vy = buf1[1][i];
+        const wx = buf2[0][i];
+        const wy = buf2[1][i];
+        const expected = (vx * wy - vy * wx);
+        try testing.expectEqual(expected, out[i]);
+    }
+}
+
+test "cross 3D" {
+    const len = 3;
+    const ns = namespace(len, f32);
+    const Batch = [ns.vectors_per_op]f32;
+    var buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+    var buf2: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+    const in1 = slices(len, Batch, &buf1);
+    const in2 = slices(len, Batch, &buf2);
+    var out_buf: [len]Batch = undefined;
+    const out = slicesMut(len, Batch, &out_buf);
+    ns.cross(in1, in2, out);
+
+    for (0..len) |j| {
+        for (0..ns.vectors_per_op) |i| {
+            const vx = buf1[(j + 1) % 3][i];
+            const vy = buf1[(j + 2) % 3][i];
+            const wx = buf2[(j + 1) % 3][i];
+            const wy = buf2[(j + 2) % 3][i];
+            const expected = (vx * wy - vy * wx);
+            try testing.expectEqual(expected, out_buf[j][i]);
+        }
+    }
+}
+
+test "moveTowards" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+        const Batch = [ns.vectors_per_op]f32;
+        var pos_buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        var tgt_buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 300));
+        const pos = slices(len, Batch, &pos_buf);
+        const tgt = slices(len, Batch, &tgt_buf);
+        const maxd: Batch = @splat(5.0);
+        var out_buf: [len]Batch = undefined;
+        const out = slicesMut(len, Batch, &out_buf);
+        ns.moveTowards(pos, tgt, &maxd, out);
+
+        for (0..ns.vectors_per_op) |j| {
+            var dist_sqrd: f32 = 0;
+            for (0..len) |i| {
+                const start = pos_buf[i][j];
+                const target = tgt_buf[i][j];
+                const d = (target - start);
+                dist_sqrd += (d * d);
+            }
+            const dist = @sqrt(dist_sqrd);
+            if (dist == 0 or dist <= 5.0) {
+                for (0..len) |i| {
+                    const expected = tgt_buf[i][j];
+                    try testing.expectEqual(expected, out_buf[i][j]);
+                }
+            }
+            for (0..len) |i| {
+                const start = pos_buf[i][j];
+                const target = tgt_buf[i][j];
+                const d = (target - start);
+                const expected = (start + ((d / dist) * 5.0));
+                try testing.expectEqual(expected, out_buf[i][j]);
+            }
+        }
+    }
+}
+
 test "eql" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
         const Batch = [ns.vectors_per_op]f32;
-        const buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32));
+        const buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
         const in1 = slices(len, Batch, &buf1);
-        const buf2: [len]Batch = @splat(iota(ns.vectors_per_op / 2, f32) ++ iota(ns.vectors_per_op / 2, f32));
+        const buf2: [len]Batch = @splat(iota((ns.vectors_per_op / 2), f32, 0, 1) ++ iota((ns.vectors_per_op / 2), f32, 0, 1));
         const in2 = slices(len, Batch, &buf2);
         var out: [ns.vectors_per_op]bool = undefined;
         ns.eql(in1, in2, &out);
