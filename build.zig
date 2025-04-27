@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const module = b.addModule("domath", .{
-        .root_source_file = "src/root.zig",
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
