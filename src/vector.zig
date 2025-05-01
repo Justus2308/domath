@@ -8,6 +8,19 @@ const assert = std.debug.assert;
 /// Note that all `out` parameters are marked `noalias` to facilitate load/store optimizations
 /// when chaining vector operations.
 pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
+    return namespaceWithConfig(len, Element, .{});
+}
+
+pub const Config = struct {
+    batch_size: ?usize = null,
+};
+
+/// Create a namespace for vector math functions specialized on `len` and `Element` to live in.
+/// Supports floats, integers and nullable pointers.
+/// Expects batches of `vectors_per_op` items (dependent on build target and config).
+/// Note that all `out` parameters are marked `noalias` to facilitate load/store optimizations
+/// when chaining vector operations.
+pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, comptime config: Config) type {
     // bools are not supported, most ops dont make sense for them.
     switch (@typeInfo(Element)) {
         .int => |info| if (info.bits == 0) @compileError("needs to be able to store 1"),
@@ -17,13 +30,11 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
         else => @compileError("unsupported element type"),
     }
     return struct {
-        pub const vectors_per_op = std.simd.suggestVectorLength(Element) orelse 1;
+        pub const vectors_per_op = config.batch_size orelse std.simd.suggestVectorLength(Element) orelse 1;
         const OpVec = @Vector(vectors_per_op, Element);
 
-        pub const Scalars = *const [vectors_per_op]Element;
-        pub const ScalarsMut = *[vectors_per_op]Element;
-        pub const Vectors = *const [len]Scalars;
-        pub const VectorsMut = *const [len]ScalarsMut;
+        pub const Scalars = [vectors_per_op]Element;
+        pub const Bools = [vectors_per_op]bool;
 
         fn scalarFromRawValue(comptime raw: comptime_int) Element {
             return switch (@typeInfo(Element)) {
@@ -39,58 +50,74 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
         const zeroes_vec: OpVec = @splat(zero_val);
         const ones_vec: OpVec = @splat(one_val);
 
-        pub fn zeroesScalar(noalias out: ScalarsMut) void {
+        pub fn zeroesScalar(noalias out: *Scalars) void {
             splatScalar(zero_val, out);
         }
-        pub fn onesScalar(noalias out: ScalarsMut) void {
+        pub fn onesScalar(noalias out: *Scalars) void {
             splatScalar(one_val, out);
         }
 
-        pub fn zeroes(noalias out: VectorsMut) void {
+        pub fn zeroes(noalias out: *const [len]*Scalars) void {
             splat(zero_val, out);
         }
-        pub fn ones(noalias out: VectorsMut) void {
+        pub fn ones(noalias out: *const [len]*Scalars) void {
             splat(one_val, out);
         }
 
-        pub fn splatScalar(in: Element, noalias out: ScalarsMut) void {
+        pub fn splatScalar(in: Element, noalias out: *Scalars) void {
             out.* = @splat(in);
         }
-        pub fn splat(in: Element, noalias out: VectorsMut) void {
+        pub fn splat(in: Element, noalias out: *const [len]*Scalars) void {
             for (out) |vec_out| {
                 vec_out.* = @splat(in);
             }
         }
 
-        pub fn asIn(slice: []const Element, offset: usize) Scalars {
+        pub fn asIn(slice: []const Element, offset: usize) *const Scalars {
             return @ptrCast(slice[offset..][0..vectors_per_op]);
         }
-        pub fn asOut(slice: []Element, offset: usize) ScalarsMut {
+        pub fn asOut(slice: []Element, offset: usize) *Scalars {
             return @ptrCast(slice[offset..][0..vectors_per_op]);
         }
 
-        pub fn add(v_in: Vectors, w_in: Vectors, noalias out: VectorsMut) void {
+        pub fn add(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
                 const opv1: OpVec = vec1_in.*;
                 const opv2: OpVec = vec2_in.*;
                 vec_out.* = (opv1 + opv2);
             }
         }
-        pub fn sub(v_in: Vectors, w_in: Vectors, noalias out: VectorsMut) void {
+        pub fn sub(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
                 const opv1: OpVec = vec1_in.*;
                 const opv2: OpVec = vec2_in.*;
                 vec_out.* = (opv1 - opv2);
             }
         }
-        pub fn mul(v_in: Vectors, w_in: Vectors, noalias out: VectorsMut) void {
+        pub fn mul(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
                 const opv1: OpVec = vec1_in.*;
                 const opv2: OpVec = vec2_in.*;
                 vec_out.* = (opv1 * opv2);
             }
         }
-        pub fn div(v_in: Vectors, w_in: Vectors, noalias out: VectorsMut) void {
+        pub fn div(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
                 const opv1: OpVec = vec1_in.*;
                 const opv2: OpVec = vec2_in.*;
@@ -98,7 +125,11 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
         }
         /// Guarantees that division by zero results in zero.
-        pub fn divAllowZero(v_in: Vectors, w_in: Vectors, noalias out: VectorsMut) void {
+        pub fn divAllowZero(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
                 const opv1: OpVec = vec1_in.*;
                 const opv2: OpVec = vec2_in.*;
@@ -106,7 +137,11 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
                 vec_out.* = @select(Element, (opv2 == zeroes_vec), zeroes_vec, res);
             }
         }
-        pub fn mod(v_in: Vectors, w_in: Vectors, noalias out: VectorsMut) void {
+        pub fn mod(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
                 const opv1: OpVec = vec1_in.*;
                 const opv2: OpVec = vec2_in.*;
@@ -114,16 +149,16 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
         }
 
-        pub fn lengths(in: Vectors, noalias out: ScalarsMut) void {
+        pub fn lengths(in: *const [len]*const Scalars, noalias out: *Scalars) void {
             const lens_sqrd = innerLengthsSqrd(in);
             const res = @sqrt(lens_sqrd);
             out.* = res;
         }
-        pub fn lengthsSqrd(in: Vectors, noalias out: ScalarsMut) void {
+        pub fn lengthsSqrd(in: *const [len]*const Scalars, noalias out: *Scalars) void {
             const res = innerLengthsSqrd(in);
             out.* = res;
         }
-        inline fn innerLengthsSqrd(in: Vectors) OpVec {
+        inline fn innerLengthsSqrd(in: *const [len]*const Scalars) OpVec {
             var res = zeroes_vec;
             for (in) |vec| {
                 const opvec: OpVec = vec.*;
@@ -133,7 +168,7 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             return res;
         }
 
-        pub fn normalize(in: Vectors, noalias out: VectorsMut) void {
+        pub fn normalize(in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             const lens: OpVec = @sqrt(innerLengthsSqrd(in));
             const ilens = (ones_vec / lens);
             for (in, out) |vec_in, vec_out| {
@@ -142,7 +177,11 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
         }
 
-        pub fn scale(v_in: Vectors, s_in: Scalars, noalias out: VectorsMut) void {
+        pub fn scale(
+            v_in: *const [len]*const Scalars,
+            s_in: *const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             const factors: OpVec = s_in.*;
             for (v_in, out) |vec_in, vec_out| {
                 var opvec: OpVec = vec_in.*;
@@ -151,7 +190,11 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
         }
 
-        pub fn dots(v_in: Vectors, w_in: Vectors, noalias out: ScalarsMut) void {
+        pub fn dots(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *Scalars,
+        ) void {
             var res = zeroes_vec;
             for (v_in, w_in) |vec1, vec2| {
                 const opv1: OpVec = vec1.*;
@@ -166,13 +209,21 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             3 => cross3,
             else => crossUnimpl,
         };
-        fn cross2(v_in: Vectors, w_in: Vectors, noalias out: ScalarsMut) void {
+        fn cross2(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *Scalars,
+        ) void {
             const prod1 = (@as(OpVec, v_in[0].*) * @as(OpVec, w_in[1].*));
             const prod2 = (@as(OpVec, v_in[1].*) * @as(OpVec, w_in[0].*));
             out.* = (prod1 - prod2);
         }
 
-        fn cross3(v_in: Vectors, w_in: Vectors, noalias out: VectorsMut) void {
+        fn cross3(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             const vx: OpVec = v_in[0].*;
             const vy: OpVec = v_in[1].*;
             const vz: OpVec = v_in[2].*;
@@ -186,20 +237,36 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             out[2].* = ((vx * wy) - (vy * wx));
         }
 
-        fn crossUnimpl(_: Vectors, _: Vectors, _: anytype) noreturn {
+        fn crossUnimpl(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            out: anytype,
+        ) noreturn {
+            _ = .{ v_in, w_in, out };
             @panic("cross product is only implemented for dim=2-3");
         }
 
-        pub fn distances(v_in: Vectors, w_in: Vectors, noalias out: ScalarsMut) void {
+        pub fn distances(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *Scalars,
+        ) void {
             const dist_sqrd = innerDistancesSqrd(v_in, w_in);
             const res = @sqrt(dist_sqrd);
             out.* = res;
         }
-        pub fn distancesSqrd(v_in: Vectors, w_in: Vectors, noalias out: ScalarsMut) void {
+        pub fn distancesSqrd(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *Scalars,
+        ) void {
             const res = innerDistancesSqrd(v_in, w_in);
             out.* = res;
         }
-        inline fn innerDistancesSqrd(v_in: Vectors, w_in: Vectors) OpVec {
+        inline fn innerDistancesSqrd(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+        ) OpVec {
             var res = zeroes_vec;
             for (v_in, w_in) |vec1, vec2| {
                 const opv1: OpVec = vec1.*;
@@ -210,7 +277,7 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             return res;
         }
 
-        pub fn invert(in: Vectors, noalias out: VectorsMut) void {
+        pub fn invert(in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             const simd_ones = ones_vec;
             for (in, out) |vec_in, vec_out| {
                 const opvec: OpVec = vec_in.*;
@@ -222,17 +289,23 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             .float, .int => negateImpl,
             else => negateUnimpl,
         };
-        fn negateImpl(in: Vectors, noalias out: VectorsMut) void {
+        fn negateImpl(in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             for (in, out) |vec_in, vec_out| {
                 const opvec: OpVec = vec_in.*;
                 vec_out.* = -opvec;
             }
         }
-        fn negateUnimpl(_: Vectors, _: VectorsMut) void {
+        fn negateUnimpl(in: *const [len]*const Scalars, out: *const [len]*Scalars) void {
+            _ = .{ in, out };
             @panic("cannot negate element type");
         }
 
-        pub fn lerp(v_in: Vectors, w_in: Vectors, amount_in: Scalars, noalias out: VectorsMut) void {
+        pub fn lerp(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            amount_in: *const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
                 const opv1: OpVec = vec1_in.*;
                 const opv2: OpVec = vec2_in.*;
@@ -240,7 +313,12 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
         }
 
-        pub fn clamp(v_in: Vectors, vmin_in: Vectors, vmax_in: Vectors, noalias out: VectorsMut) void {
+        pub fn clamp(
+            v_in: *const [len]*const Scalars,
+            vmin_in: *const [len]*const Scalars,
+            vmax_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             for (v_in, vmin_in, vmax_in, out) |vec_in, vec_min, vec_max, vec_out| {
                 const opvec: OpVec = vec_in.*;
                 const opmin: OpVec = vec_min.*;
@@ -249,7 +327,16 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
         }
 
-        pub fn moveTowards(v_in: Vectors, target_in: Vectors, max_dist_in: Scalars, noalias out: VectorsMut) void {
+        // Using `@select` here to effectively perform bitwise operations is a rather
+        // unfortunate result of https://github.com/ziglang/zig/issues/14306, but
+        // codegen seems to be fine anyways.
+
+        pub fn moveTowards(
+            v_in: *const [len]*const Scalars,
+            target_in: *const [len]*const Scalars,
+            max_dist_in: *const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
             var dists_sqrd = zeroes_vec;
             for (v_in, target_in) |vec, target| {
                 const opvec: OpVec = vec.*;
@@ -278,11 +365,11 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
         }
 
-        // Using `@select` here to effectively perform a bitwise and is a rather
-        // unfortunate result of https://github.com/ziglang/zig/issues/14306,
-        // but codegen seems to be fine anyways.
-
-        pub fn eql(v_in: Vectors, w_in: Vectors, noalias out: *[vectors_per_op]bool) void {
+        pub fn eql(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            noalias out: *Bools,
+        ) void {
             var res: @Vector(vectors_per_op, bool) = @splat(true);
             for (v_in, w_in) |vec1, vec2| {
                 const opv1: OpVec = vec1.*;
@@ -303,7 +390,12 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             else => approxEqUnimpl,
         };
 
-        fn approxEqAbsFloat(v_in: Vectors, w_in: Vectors, tolerances_in: Scalars, noalias out: *[vectors_per_op]bool) void {
+        fn approxEqAbsFloat(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            tolerances_in: *const Scalars,
+            noalias out: *Bools,
+        ) void {
             assert(@reduce(.Min, tolerances_in) >= 0.0);
 
             var res: @Vector((vectors_per_op / 8), u8) = @splat(@intFromBool(true));
@@ -317,7 +409,12 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
             out.* = res;
         }
-        fn approxEqRelFloat(v_in: Vectors, w_in: Vectors, tolerances_in: Scalars, noalias out: *[vectors_per_op]bool) void {
+        fn approxEqRelFloat(
+            v_in: *const [len]*const Scalars,
+            w_in: *const [len]*const Scalars,
+            tolerances_in: *const Scalars,
+            noalias out: *Bools,
+        ) void {
             assert(@reduce(.Min, tolerances_in) > 0.0);
 
             var res: @Vector(vectors_per_op, bool) = @splat(true);
@@ -332,7 +429,12 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
             }
             out.* = res;
         }
-        fn approxEqUnimpl(_: Vectors, _: Vectors, _: Scalars, _: *[vectors_per_op]bool) void {
+        fn approxEqUnimpl(
+            _: *const [len]*const Scalars,
+            _: *const [len]*const Scalars,
+            _: *const Scalars,
+            _: *Bools,
+        ) void {
             @panic("approxEq functions are only available for float vectors");
         }
     };
@@ -366,10 +468,9 @@ inline fn slicesMut(comptime len: usize, comptime T: type, buf: *[len]T) *const 
 test "lenghts" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const Batch = [ns.vectors_per_op]f32;
-        const buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        const in = slices(len, Batch, &buf);
-        var out: Batch = undefined;
+        const buf: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in = slices(len, ns.Scalars, &buf);
+        var out: ns.Scalars = undefined;
         ns.lengths(in, &out);
 
         for (out, 0..) |val, i| {
@@ -386,14 +487,13 @@ test "lenghts" {
 test "normalize + scale roundtrip" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const Batch = [ns.vectors_per_op]f32;
-        const buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 3));
-        const in = slices(len, Batch, &buf);
-        var normed_buf: [len]Batch = undefined;
-        var scaled_buf: [len]Batch = undefined;
-        const normed = slicesMut(len, Batch, &normed_buf);
-        const scaled = slicesMut(len, Batch, &scaled_buf);
-        var lengths: Batch = undefined;
+        const buf: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 3));
+        const in = slices(len, ns.Scalars, &buf);
+        var normed_buf: [len]ns.Scalars = undefined;
+        var scaled_buf: [len]ns.Scalars = undefined;
+        const normed = slicesMut(len, ns.Scalars, &normed_buf);
+        const scaled = slicesMut(len, ns.Scalars, &scaled_buf);
+        var lengths: ns.Scalars = undefined;
 
         ns.normalize(in, normed);
         ns.lengths(in, &lengths);
@@ -410,12 +510,11 @@ test "normalize + scale roundtrip" {
 test "distances" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const Batch = [ns.vectors_per_op]f32;
-        var buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 3));
-        var buf2: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 2));
-        const in1 = slices(len, Batch, &buf1);
-        const in2 = slices(len, Batch, &buf2);
-        var out: Batch = undefined;
+        var buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 3));
+        var buf2: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 2));
+        const in1 = slices(len, ns.Scalars, &buf1);
+        const in2 = slices(len, ns.Scalars, &buf2);
+        var out: ns.Scalars = undefined;
         ns.distances(in1, in2, &out);
 
         for (out, 0..) |val, i| {
@@ -431,12 +530,11 @@ test "distances" {
 test "dots" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const Batch = [ns.vectors_per_op]f32;
-        const buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        const in1 = slices(len, Batch, &buf1);
-        const buf2: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
-        const in2 = slices(len, Batch, &buf2);
-        var out: Batch = undefined;
+        const buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in1 = slices(len, ns.Scalars, &buf1);
+        const buf2: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+        const in2 = slices(len, ns.Scalars, &buf2);
+        var out: ns.Scalars = undefined;
         ns.dots(in1, in2, &out);
 
         for (out, 0..) |val, i| {
@@ -452,12 +550,11 @@ test "dots" {
 test "cross 2D" {
     const len = 2;
     const ns = namespace(len, f32);
-    const Batch = [ns.vectors_per_op]f32;
-    var buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-    var buf2: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
-    const in1 = slices(len, Batch, &buf1);
-    const in2 = slices(len, Batch, &buf2);
-    var out: Batch = undefined;
+    var buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+    var buf2: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+    const in1 = slices(len, ns.Scalars, &buf1);
+    const in2 = slices(len, ns.Scalars, &buf2);
+    var out: ns.Scalars = undefined;
     ns.cross(in1, in2, &out);
 
     for (0..ns.vectors_per_op) |i| {
@@ -473,13 +570,12 @@ test "cross 2D" {
 test "cross 3D" {
     const len = 3;
     const ns = namespace(len, f32);
-    const Batch = [ns.vectors_per_op]f32;
-    var buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-    var buf2: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
-    const in1 = slices(len, Batch, &buf1);
-    const in2 = slices(len, Batch, &buf2);
-    var out_buf: [len]Batch = undefined;
-    const out = slicesMut(len, Batch, &out_buf);
+    var buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+    var buf2: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+    const in1 = slices(len, ns.Scalars, &buf1);
+    const in2 = slices(len, ns.Scalars, &buf2);
+    var out_buf: [len]ns.Scalars = undefined;
+    const out = slicesMut(len, ns.Scalars, &out_buf);
     ns.cross(in1, in2, out);
 
     for (0..len) |j| {
@@ -497,14 +593,13 @@ test "cross 3D" {
 test "moveTowards" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const Batch = [ns.vectors_per_op]f32;
-        var pos_buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        var tgt_buf: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 1000, 300));
-        const pos = slices(len, Batch, &pos_buf);
-        const tgt = slices(len, Batch, &tgt_buf);
-        const maxd: Batch = @splat(5.0);
-        var out_buf: [len]Batch = undefined;
-        const out = slicesMut(len, Batch, &out_buf);
+        var pos_buf: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        var tgt_buf: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 300));
+        const pos = slices(len, ns.Scalars, &pos_buf);
+        const tgt = slices(len, ns.Scalars, &tgt_buf);
+        const maxd: ns.Scalars = @splat(5.0);
+        var out_buf: [len]ns.Scalars = undefined;
+        const out = slicesMut(len, ns.Scalars, &out_buf);
         ns.moveTowards(pos, tgt, &maxd, out);
 
         for (0..ns.vectors_per_op) |j| {
@@ -536,11 +631,10 @@ test "moveTowards" {
 test "eql" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const Batch = [ns.vectors_per_op]f32;
-        const buf1: [len]Batch = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        const in1 = slices(len, Batch, &buf1);
-        const buf2: [len]Batch = @splat(iota((ns.vectors_per_op / 2), f32, 0, 1) ++ iota((ns.vectors_per_op / 2), f32, 0, 1));
-        const in2 = slices(len, Batch, &buf2);
+        const buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in1 = slices(len, ns.Scalars, &buf1);
+        const buf2: [len]ns.Scalars = @splat(iota((ns.vectors_per_op / 2), f32, 0, 1) ++ iota((ns.vectors_per_op / 2), f32, 0, 1));
+        const in2 = slices(len, ns.Scalars, &buf2);
         var out: [ns.vectors_per_op]bool = undefined;
         ns.eql(in1, in2, &out);
 

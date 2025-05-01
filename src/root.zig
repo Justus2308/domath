@@ -1,7 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
 
-pub const vector = @import("vector.zig").namespace;
+const vector_import = @import("vector.zig");
+pub const vector = vector_import.namespace;
+pub const VectorConfig = vector_import.Config;
+pub const vectorEx = vector_import.namespaceWithConfig;
 
 pub const v2f32 = vector(2, f32);
 pub const v3f32 = vector(3, f32);
