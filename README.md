@@ -13,7 +13,7 @@ Of course this requires storing vectors struct-of-array instead of array-of-stru
 
 Zig vectors don't really have a well-defined memory layout at the moment and their alignment requirements are at times... surprising, so this library aims to not expose the user to any raw vectors but rather to work on plain arrays of data and only use vectors for internal operations. Zig guarantees that arrays coerce to vectors and vice versa ([docs](https://ziglang.org/documentation/master/#Vectors)). This makes working with data that has to have a certain layout easy (e.g. GPU buffers).
 
-All `out` parameters are marked `noalias` to enable the compiler to do load/store elimination when chaining operations. This means that the output buffer cannot overlap with the input buffers.
+All `out` parameters are marked `noalias` to enable the compiler to do load/store elimination when chaining operations. This means that the output buffers cannot overlap with the input buffers.
 It is thus recommended to use this library in conjunction with immutable data structures (which also makes multi threading easier).
 
 ## Usage

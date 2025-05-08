@@ -18,7 +18,7 @@ pub const Config = struct {
 /// Create a namespace for vector math functions specialized on `len` and `Element` to live in.
 /// Supports floats, integers and nullable pointers.
 /// Expects batches of `vectors_per_op` items (dependent on build target and config).
-/// Note that all `out` parameters are marked `noalias` to facilitate load/store optimizations
+/// Note that all parameters are marked `noalias` to facilitate load/store optimizations
 /// when chaining vector operations.
 pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, comptime config: Config) type {
     // bools are not supported, most ops dont make sense for them.
@@ -30,7 +30,7 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         else => @compileError("unsupported element type"),
     }
     return struct {
-        pub const vectors_per_op = config.batch_size orelse std.simd.suggestVectorLength(Element) orelse 1;
+        pub const vectors_per_op = config.batch_size orelse @as(usize, std.simd.suggestVectorLength(Element) orelse 1);
         const OpVec = @Vector(vectors_per_op, Element);
 
         pub const Scalars = [vectors_per_op]Element;
@@ -81,8 +81,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         pub fn add(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
@@ -92,8 +92,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
         pub fn sub(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
@@ -103,8 +103,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
         pub fn mul(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
@@ -114,8 +114,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
         pub fn div(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
@@ -126,8 +126,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
         /// Guarantees that division by zero results in zero.
         pub fn divAllowZero(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
@@ -138,8 +138,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
         pub fn mod(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
@@ -149,16 +149,16 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
 
-        pub fn lengths(in: *const [len]*const Scalars, noalias out: *Scalars) void {
+        pub fn lengths(noalias in: *const [len]*const Scalars, noalias out: *Scalars) void {
             const lens_sqrd = innerLengthsSqrd(in);
             const res = @sqrt(lens_sqrd);
             out.* = res;
         }
-        pub fn lengthsSqrd(in: *const [len]*const Scalars, noalias out: *Scalars) void {
+        pub fn lengthsSqrd(noalias in: *const [len]*const Scalars, noalias out: *Scalars) void {
             const res = innerLengthsSqrd(in);
             out.* = res;
         }
-        inline fn innerLengthsSqrd(in: *const [len]*const Scalars) OpVec {
+        inline fn innerLengthsSqrd(noalias in: *const [len]*const Scalars) OpVec {
             var res = zeroes_vec;
             for (in) |vec| {
                 const opvec: OpVec = vec.*;
@@ -168,7 +168,7 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             return res;
         }
 
-        pub fn normalize(in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+        pub fn normalize(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             const lens: OpVec = @sqrt(innerLengthsSqrd(in));
             const ilens = (ones_vec / lens);
             for (in, out) |vec_in, vec_out| {
@@ -178,8 +178,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         pub fn scale(
-            v_in: *const [len]*const Scalars,
-            s_in: *const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias s_in: *const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             const factors: OpVec = s_in.*;
@@ -191,8 +191,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         pub fn dots(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *Scalars,
         ) void {
             var res = zeroes_vec;
@@ -210,8 +210,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             else => crossUnimpl,
         };
         fn cross2(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *Scalars,
         ) void {
             const prod1 = (@as(OpVec, v_in[0].*) * @as(OpVec, w_in[1].*));
@@ -220,8 +220,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         fn cross3(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             const vx: OpVec = v_in[0].*;
@@ -247,8 +247,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         pub fn distances(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *Scalars,
         ) void {
             const dist_sqrd = innerDistancesSqrd(v_in, w_in);
@@ -256,16 +256,16 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             out.* = res;
         }
         pub fn distancesSqrd(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *Scalars,
         ) void {
             const res = innerDistancesSqrd(v_in, w_in);
             out.* = res;
         }
         inline fn innerDistancesSqrd(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
         ) OpVec {
             var res = zeroes_vec;
             for (v_in, w_in) |vec1, vec2| {
@@ -277,7 +277,7 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             return res;
         }
 
-        pub fn invert(in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+        pub fn invert(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             const simd_ones = ones_vec;
             for (in, out) |vec_in, vec_out| {
                 const opvec: OpVec = vec_in.*;
@@ -289,7 +289,7 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             .float, .int => negateImpl,
             else => negateUnimpl,
         };
-        fn negateImpl(in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+        fn negateImpl(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             for (in, out) |vec_in, vec_out| {
                 const opvec: OpVec = vec_in.*;
                 vec_out.* = -opvec;
@@ -301,9 +301,9 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         pub fn lerp(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
-            amount_in: *const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
+            noalias amount_in: *const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
@@ -314,9 +314,9 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         pub fn clamp(
-            v_in: *const [len]*const Scalars,
-            vmin_in: *const [len]*const Scalars,
-            vmax_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias vmin_in: *const [len]*const Scalars,
+            noalias vmax_in: *const [len]*const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             for (v_in, vmin_in, vmax_in, out) |vec_in, vec_min, vec_max, vec_out| {
@@ -332,9 +332,9 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         // codegen seems to be fine anyways.
 
         pub fn moveTowards(
-            v_in: *const [len]*const Scalars,
-            target_in: *const [len]*const Scalars,
-            max_dist_in: *const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias target_in: *const [len]*const Scalars,
+            noalias max_dist_in: *const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
             var dists_sqrd = zeroes_vec;
@@ -436,6 +436,34 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             _: *Bools,
         ) void {
             @panic("approxEq functions are only available for float vectors");
+        }
+
+        pub fn casted(comptime T: type) type {
+            return namespaceWithConfig(len, T, .{ .batch_size = vectors_per_op });
+        }
+        pub fn cast(comptime T: type, in: *const [len]*const Scalars, out: *const [len]*casted(T).Scalars) void {
+            for (in, out) |vec_in, vec_out| {
+                const opvec: OpVec = vec_in.*;
+                vec_out.* = @as(casted(T).OpVec, switch (@typeInfo(Element)) {
+                    .float => switch (@typeInfo(T)) {
+                        .float => @floatCast(opvec),
+                        .int => @intFromFloat(opvec),
+                        else => |tag| @compileError("cast from float to " ++ @tagName(tag) ++ " not possible"),
+                    },
+                    .int => switch (@typeInfo(T)) {
+                        .float => @floatFromInt(opvec),
+                        .int => @intCast(opvec),
+                        .pointer, .optional => @ptrFromInt(opvec),
+                        else => |tag| @compileError("cast from int to " ++ @tagName(tag) ++ " not possible"),
+                    },
+                    .pointer, .optional => switch (@typeInfo(T)) {
+                        .int => @intFromPtr(opvec),
+                        .pointer, .optional => @ptrCast(opvec),
+                        else => |tag| @compileError("cast from pointer to " ++ @tagName(tag) ++ " not possible"),
+                    },
+                    else => unreachable,
+                });
+            }
         }
     };
 }
@@ -643,6 +671,35 @@ test "eql" {
         }
         for ((ns.vectors_per_op / 2)..ns.vectors_per_op) |i| {
             try testing.expectEqual(false, out[i]);
+        }
+    }
+}
+
+test "cast" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+
+        const buf_float: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in_float = slices(len, ns.Scalars, &buf_float);
+        var buf_int: [len]ns.casted(usize).Scalars = undefined;
+        const out_int = slicesMut(len, ns.casted(usize).Scalars, &buf_int);
+        ns.cast(usize, in_float, out_int);
+
+        for (&buf_int) |vec| {
+            for (vec, 0..) |v, i| {
+                try testing.expectEqual(i, v);
+            }
+        }
+
+        const in_int = slices(len, ns.casted(usize).Scalars, &buf_int);
+        var buf_pointer: [len]ns.casted(?*anyopaque).Scalars = undefined;
+        const out_pointer = slicesMut(len, ns.casted(?*anyopaque).Scalars, &buf_pointer);
+        ns.casted(usize).cast(?*anyopaque, in_int, out_pointer);
+
+        for (&buf_pointer) |vec| {
+            for (vec, 0..) |v, i| {
+                try testing.expectEqual(@as(?*anyopaque, @ptrFromInt(i)), v);
+            }
         }
     }
 }
