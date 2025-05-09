@@ -63,11 +63,11 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         const zeroes_vec: OpVec = @splat(zero_val);
         const ones_vec: OpVec = @splat(one_val);
 
-        pub fn zeroesScalar(noalias out: *Scalars) void {
-            splatScalar(zero_val, out);
+        pub fn zeroesScalar() Scalars {
+            return splatScalar(zero_val);
         }
-        pub fn onesScalar(noalias out: *Scalars) void {
-            splatScalar(one_val, out);
+        pub fn onesScalar() Scalars {
+            return splatScalar(one_val);
         }
 
         pub fn zeroes(noalias out: *const [len]*Scalars) void {
@@ -77,8 +77,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             splat(one_val, out);
         }
 
-        pub fn splatScalar(in: Element, noalias out: *Scalars) void {
-            out.* = @splat(in);
+        pub fn splatScalar(in: Element) Scalars {
+            return @splat(in);
         }
         pub fn splat(in: Element, noalias out: *const [len]*Scalars) void {
             for (out) |vec_out| {
