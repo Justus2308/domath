@@ -49,6 +49,8 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         pub const Scalars = [vectors_per_op]Element;
         pub const Bools = [vectors_per_op]bool;
 
+        pub const single_dim = namespaceWithConfig(1, Element, .{ .batch_size = vectors_per_op });
+
         fn scalarFromRawValue(comptime raw: comptime_int) Element {
             return switch (@typeInfo(Element)) {
                 .int, .float => raw,
@@ -340,6 +342,30 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
 
+        pub fn min(
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
+            for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
+                const opv1: OpVec = vec1_in.*;
+                const opv2: OpVec = vec2_in.*;
+                vec_out.* = @min(opv1, opv2);
+            }
+        }
+
+        pub fn max(
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
+            noalias out: *const [len]*Scalars,
+        ) void {
+            for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
+                const opv1: OpVec = vec1_in.*;
+                const opv2: OpVec = vec2_in.*;
+                vec_out.* = @max(opv1, opv2);
+            }
+        }
+
         // Using `@select` here to effectively perform bitwise operations is a rather
         // unfortunate result of https://github.com/ziglang/zig/issues/14306, but
         // codegen seems to be fine anyways.
@@ -505,12 +531,75 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         /// Returns an array of pointers to appropriately sized arrays/slices inside of the provided `Slicable`.
-        pub inline fn slices(ptr_to_slicable: anytype) SliceType(@TypeOf(ptr_to_slicable)) {
+        pub inline fn slices(noalias ptr_to_slicable: anytype) SliceType(@TypeOf(ptr_to_slicable)) {
             var arr: SliceType(@TypeOf(ptr_to_slicable)) = undefined;
             for (&arr, ptr_to_slicable) |*a, *s| {
                 a.* = s;
             }
             return arr;
+        }
+
+        fn ScalarsPtrType(comptime Slices: type) type {
+            return switch (@typeInfo(Slices)) {
+                .pointer => |ptr_info| switch (ptr_info.size) {
+                    .one => switch (@typeInfo(ptr_info.child)) {
+                        .array => |arr_info| if (arr_info.len != len) {
+                            @compileError(std.fmt.comptimePrint("need array of 'Scalars' with length {d}, got {d}", .{ len, arr_info.len }));
+                        } else switch (@typeInfo(arr_info.child)) {
+                            .pointer => |inner_ptr_info| {
+                                switch (inner_ptr_info.size) {
+                                    .one => if (inner_ptr_info.child != Scalars) {
+                                        @compileError("need array of 'Scalars', got '" ++ @typeName(arr_info.child) ++ "'");
+                                    } else {
+                                        return if (inner_ptr_info.is_const) *const Scalars else *Scalars;
+                                    },
+                                    else => @compileError("need pointers to single 'Scalars'"),
+                                }
+                            },
+                            else => @compileError("need pointers to 'Scalars'"),
+                        },
+                        else => @compileError("need pointer to array of pointers to 'Scalars'"),
+                    },
+                    else => @compileError("need pointer to a single array of pointers to 'Scalars'"),
+                },
+                else => |info| @compileError("need a 'pointer', got '" ++ @tagName(info) ++ "'"),
+            };
+        }
+
+        pub const Dimension = switch (len) {
+            1 => enum(usize) { x = 0 },
+            2 => enum(usize) { x = 0, y = 1 },
+            3 => enum(usize) { x = 0, y = 1, z = 2 },
+            4 => enum(usize) { x = 0, y = 1, z = 2, w = 3 },
+            else => usize,
+        };
+        inline fn dimAsInt(dimension: Dimension) usize {
+            return if (len <= 4) @intFromEnum(dimension) else dimension;
+        }
+
+        /// Extract a single dimension from `in`.
+        pub inline fn extractDim(noalias in: anytype, dimension: Dimension) ScalarsPtrType(@TypeOf(in)) {
+            const index = dimAsInt(dimension);
+            assert(index < len);
+            return in.*[index];
+        }
+
+        /// Extract a single element from `in`.
+        pub inline fn extractElem(noalias in: *const [len]*const Scalars, index: usize) [len]Element {
+            assert(index < vectors_per_op);
+            var elems: [len]Element = undefined;
+            for (in, &elems) |vec, *elem| {
+                elem.* = vec.*[index];
+            }
+            return elems;
+        }
+
+        pub fn swizzle(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars, order: [len]Dimension) void {
+            for (out, order) |vec_out, dim| {
+                const index = dimAsInt(dim);
+                assert(index < len);
+                vec_out.* = in.*[index].*;
+            }
         }
     };
 }
@@ -696,7 +785,7 @@ test "eql" {
         const in1 = ns.slices(&buf1);
         const buf2: ns.Slicable = @splat(iota((ns.vectors_per_op / 2), f32, 0, 1) ++ iota((ns.vectors_per_op / 2), f32, 0, 1));
         const in2 = ns.slices(&buf2);
-        var out: [ns.vectors_per_op]bool = undefined;
+        var out: ns.Bools = undefined;
         ns.eql(&in1, &in2, &out);
 
         for (0..(ns.vectors_per_op / 2)) |i| {
@@ -733,6 +822,56 @@ test "cast" {
             for (vec, 0..) |v, i| {
                 try testing.expectEqual(@as(?*anyopaque, @ptrFromInt(i)), v);
             }
+        }
+    }
+}
+
+test "extract" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+
+        const buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in1 = ns.slices(&buf1);
+
+        const dim2 = ns.extractDim(&in1, .y);
+        for (dim2, &buf1[1]) |*extr, *orig| {
+            try testing.expectEqual(orig, extr);
+        }
+
+        var buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in2 = ns.slices(&buf2);
+
+        const dim1 = ns.extractDim(&in2, .x);
+        for (dim1, &buf2[0]) |*extr, *orig| {
+            try testing.expectEqual(orig, extr);
+        }
+
+        const elem1 = ns.extractElem(&in1, (ns.vectors_per_op - 1));
+        for (elem1) |e| {
+            try testing.expectEqual((ns.vectors_per_op - 1), e);
+        }
+    }
+}
+
+test "swizzle" {
+    const ns = namespace(4, usize);
+
+    const in_buf: ns.Slicable = .{
+        ns.splatScalar(0),
+        ns.splatScalar(1),
+        ns.splatScalar(2),
+        ns.splatScalar(3),
+    };
+    const in = ns.slices(&in_buf);
+    var out_buf: ns.Slicable = undefined;
+    const out = ns.slices(&out_buf);
+
+    const order = [4]ns.Dimension{ .z, .z, .y, .w };
+    ns.swizzle(&in, &out, order);
+
+    for (out, order) |vec, expected| {
+        for (vec) |elem| {
+            try testing.expectEqual(@intFromEnum(expected), elem);
         }
     }
 }
