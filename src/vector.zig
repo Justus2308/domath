@@ -2,9 +2,29 @@ const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
 
+/// Assumes cache line aligned batches
+pub fn calcBatchSize(comptime Element: type) comptime_int {
+    verifyElemType(Element);
+    return @max(
+        std.simd.suggestVectorLength(Element) orelse 1,
+        @divExact(std.atomic.cache_line, @sizeOf(Element)),
+    );
+}
+
+fn verifyElemType(comptime Element: type) void {
+    // bools are not supported, most ops dont make sense for them.
+    switch (@typeInfo(Element)) {
+        .int => |info| if (info.bits == 0) @compileError("needs to be able to store 1"),
+        .optional => |info| if (@typeInfo(info.child) != .pointer) @compileError("only optional pointers are allowed"),
+        .pointer => |info| if (info.is_allowzero == false) @compileError("needs to be able to store null"),
+        .float => {},
+        else => @compileError("unsupported element type"),
+    }
+}
+
 /// Create a namespace for vector math functions specialized on `len` and `Element` to live in.
 /// Supports floats, integers and nullable pointers.
-/// Expects batches of `vectors_per_op` items (dependent on build target).
+/// Expects batches of `vectors_per_op` items (depends on build target).
 /// Note that all `out` parameters are marked `noalias` to facilitate load/store optimizations
 /// when chaining vector operations.
 pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
@@ -17,20 +37,13 @@ pub const Config = struct {
 
 /// Create a namespace for vector math functions specialized on `len` and `Element` to live in.
 /// Supports floats, integers and nullable pointers.
-/// Expects batches of `vectors_per_op` items (dependent on build target and config).
+/// Expects batches of `vectors_per_op` items (depends on build target/config).
 /// Note that all parameters are marked `noalias` to facilitate load/store optimizations
 /// when chaining vector operations.
 pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, comptime config: Config) type {
-    // bools are not supported, most ops dont make sense for them.
-    switch (@typeInfo(Element)) {
-        .int => |info| if (info.bits == 0) @compileError("needs to be able to store 1"),
-        .optional => |info| if (@typeInfo(info.child) != .pointer) @compileError("only optional pointers are allowed"),
-        .pointer => |info| if (!info.is_allowzero) @compileError("needs to be able to store null"),
-        .float => {},
-        else => @compileError("unsupported element type"),
-    }
+    verifyElemType(Element);
     return struct {
-        pub const vectors_per_op = config.batch_size orelse @as(usize, std.simd.suggestVectorLength(Element) orelse 1);
+        pub const vectors_per_op = config.batch_size orelse @as(usize, calcBatchSize(Element));
         const OpVec = @Vector(vectors_per_op, Element);
 
         pub const Scalars = [vectors_per_op]Element;
@@ -465,6 +478,40 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                 });
             }
         }
+
+        pub const Slicable = [len]Scalars;
+
+        fn SliceType(comptime Pointer: type) type {
+            return switch (@typeInfo(Pointer)) {
+                .pointer => |ptr_info| switch (ptr_info.size) {
+                    .one => switch (@typeInfo(ptr_info.child)) {
+                        .array => |arr_info| if (arr_info.len != len) {
+                            @compileError(std.fmt.comptimePrint("need array of 'Scalars' with length {d}, got {d}", .{ len, arr_info.len }));
+                        } else if (arr_info.child != Scalars) {
+                            @compileError("need array of 'Scalars', got '" ++ @typeName(arr_info.child) ++ "'");
+                        } else {
+                            return @Type(.{ .array = .{
+                                .len = len,
+                                .child = if (ptr_info.is_const) *const Scalars else *Scalars,
+                                .sentinel_ptr = null,
+                            } });
+                        },
+                        else => @compileError("need pointer to 'Slicable'"),
+                    },
+                    else => @compileError("need pointer to a single 'Slicable'"),
+                },
+                else => |info| @compileError("need a 'pointer', got '" ++ @tagName(info) ++ "'"),
+            };
+        }
+
+        /// Returns an array of pointers to appropriately sized arrays/slices inside of the provided `Slicable`.
+        pub inline fn slices(ptr_to_slicable: anytype) SliceType(@TypeOf(ptr_to_slicable)) {
+            var arr: SliceType(@TypeOf(ptr_to_slicable)) = undefined;
+            for (&arr, ptr_to_slicable) |*a, *s| {
+                a.* = s;
+            }
+            return arr;
+        }
     };
 }
 
@@ -476,30 +523,16 @@ inline fn iota(comptime len: usize, comptime T: type, comptime offset: usize, co
     }
     return arr;
 }
-inline fn slices(comptime len: usize, comptime T: type, buf: *const [len]T) *const [len]*const T {
-    var arr: [len]*const T = undefined;
-    for (0..len) |i| {
-        arr[i] = &buf[i];
-    }
-    return &arr;
-}
-inline fn slicesMut(comptime len: usize, comptime T: type, buf: *[len]T) *const [len]*T {
-    var arr: [len]*T = undefined;
-    for (0..len) |i| {
-        arr[i] = &buf[i];
-    }
-    return &arr;
-}
 
 // TESTS
 
 test "lenghts" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const buf: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        const in = slices(len, ns.Scalars, &buf);
+        const buf: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in = ns.slices(&buf);
         var out: ns.Scalars = undefined;
-        ns.lengths(in, &out);
+        ns.lengths(&in, &out);
 
         for (out, 0..) |val, i| {
             var len_sqrd: f32 = 0;
@@ -516,16 +549,16 @@ test "normalize + scale roundtrip" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
         const buf: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 3));
-        const in = slices(len, ns.Scalars, &buf);
-        var normed_buf: [len]ns.Scalars = undefined;
-        var scaled_buf: [len]ns.Scalars = undefined;
-        const normed = slicesMut(len, ns.Scalars, &normed_buf);
-        const scaled = slicesMut(len, ns.Scalars, &scaled_buf);
+        const in = ns.slices(&buf);
+        var normed_buf: ns.Slicable = undefined;
+        var scaled_buf: ns.Slicable = undefined;
+        const normed = ns.slices(&normed_buf);
+        const scaled = ns.slices(&scaled_buf);
         var lengths: ns.Scalars = undefined;
 
-        ns.normalize(in, normed);
-        ns.lengths(in, &lengths);
-        ns.scale(normed, &lengths, scaled);
+        ns.normalize(&in, &normed);
+        ns.lengths(&in, &lengths);
+        ns.scale(&normed, &lengths, &scaled);
 
         for (buf, scaled_buf) |orig, result| {
             for (orig, result) |a, b| {
@@ -538,12 +571,12 @@ test "normalize + scale roundtrip" {
 test "distances" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        var buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 3));
-        var buf2: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 2));
-        const in1 = slices(len, ns.Scalars, &buf1);
-        const in2 = slices(len, ns.Scalars, &buf2);
+        var buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 3));
+        var buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 1000, 2));
+        const in1 = ns.slices(&buf1);
+        const in2 = ns.slices(&buf2);
         var out: ns.Scalars = undefined;
-        ns.distances(in1, in2, &out);
+        ns.distances(&in1, &in2, &out);
 
         for (out, 0..) |val, i| {
             var dist_sqrd: f32 = 0;
@@ -558,12 +591,12 @@ test "distances" {
 test "dots" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        const in1 = slices(len, ns.Scalars, &buf1);
-        const buf2: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
-        const in2 = slices(len, ns.Scalars, &buf2);
+        const buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in1 = ns.slices(&buf1);
+        const buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+        const in2 = ns.slices(&buf2);
         var out: ns.Scalars = undefined;
-        ns.dots(in1, in2, &out);
+        ns.dots(&in1, &in2, &out);
 
         for (out, 0..) |val, i| {
             var expected: f32 = 0;
@@ -578,12 +611,12 @@ test "dots" {
 test "cross 2D" {
     const len = 2;
     const ns = namespace(len, f32);
-    var buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-    var buf2: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
-    const in1 = slices(len, ns.Scalars, &buf1);
-    const in2 = slices(len, ns.Scalars, &buf2);
+    var buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+    var buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+    const in1 = ns.slices(&buf1);
+    const in2 = ns.slices(&buf2);
     var out: ns.Scalars = undefined;
-    ns.cross(in1, in2, &out);
+    ns.cross(&in1, &in2, &out);
 
     for (0..ns.vectors_per_op) |i| {
         const vx = buf1[0][i];
@@ -598,13 +631,13 @@ test "cross 2D" {
 test "cross 3D" {
     const len = 3;
     const ns = namespace(len, f32);
-    var buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-    var buf2: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
-    const in1 = slices(len, ns.Scalars, &buf1);
-    const in2 = slices(len, ns.Scalars, &buf2);
-    var out_buf: [len]ns.Scalars = undefined;
-    const out = slicesMut(len, ns.Scalars, &out_buf);
-    ns.cross(in1, in2, out);
+    var buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+    var buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 1000, 3));
+    const in1 = ns.slices(&buf1);
+    const in2 = ns.slices(&buf2);
+    var out_buf: ns.Slicable = undefined;
+    const out = ns.slices(&out_buf);
+    ns.cross(&in1, &in2, &out);
 
     for (0..len) |j| {
         for (0..ns.vectors_per_op) |i| {
@@ -621,14 +654,14 @@ test "cross 3D" {
 test "moveTowards" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        var pos_buf: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        var tgt_buf: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 1000, 300));
-        const pos = slices(len, ns.Scalars, &pos_buf);
-        const tgt = slices(len, ns.Scalars, &tgt_buf);
+        var pos_buf: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        var tgt_buf: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 1000, 300));
+        const pos = ns.slices(&pos_buf);
+        const tgt = ns.slices(&tgt_buf);
         const maxd: ns.Scalars = @splat(5.0);
-        var out_buf: [len]ns.Scalars = undefined;
-        const out = slicesMut(len, ns.Scalars, &out_buf);
-        ns.moveTowards(pos, tgt, &maxd, out);
+        var out_buf: ns.Slicable = undefined;
+        const out = ns.slices(&out_buf);
+        ns.moveTowards(&pos, &tgt, &maxd, &out);
 
         for (0..ns.vectors_per_op) |j| {
             var dist_sqrd: f32 = 0;
@@ -659,12 +692,12 @@ test "moveTowards" {
 test "eql" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
-        const buf1: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        const in1 = slices(len, ns.Scalars, &buf1);
-        const buf2: [len]ns.Scalars = @splat(iota((ns.vectors_per_op / 2), f32, 0, 1) ++ iota((ns.vectors_per_op / 2), f32, 0, 1));
-        const in2 = slices(len, ns.Scalars, &buf2);
+        const buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in1 = ns.slices(&buf1);
+        const buf2: ns.Slicable = @splat(iota((ns.vectors_per_op / 2), f32, 0, 1) ++ iota((ns.vectors_per_op / 2), f32, 0, 1));
+        const in2 = ns.slices(&buf2);
         var out: [ns.vectors_per_op]bool = undefined;
-        ns.eql(in1, in2, &out);
+        ns.eql(&in1, &in2, &out);
 
         for (0..(ns.vectors_per_op / 2)) |i| {
             try testing.expectEqual(true, out[i]);
@@ -679,11 +712,11 @@ test "cast" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
 
-        const buf_float: [len]ns.Scalars = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        const in_float = slices(len, ns.Scalars, &buf_float);
-        var buf_int: [len]ns.casted(usize).Scalars = undefined;
-        const out_int = slicesMut(len, ns.casted(usize).Scalars, &buf_int);
-        ns.cast(usize, in_float, out_int);
+        const buf_float: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in_float = ns.slices(&buf_float);
+        var buf_int: ns.casted(usize).Slicable = undefined;
+        const out_int = ns.casted(usize).slices(&buf_int);
+        ns.cast(usize, &in_float, &out_int);
 
         for (&buf_int) |vec| {
             for (vec, 0..) |v, i| {
@@ -691,10 +724,10 @@ test "cast" {
             }
         }
 
-        const in_int = slices(len, ns.casted(usize).Scalars, &buf_int);
-        var buf_pointer: [len]ns.casted(?*anyopaque).Scalars = undefined;
-        const out_pointer = slicesMut(len, ns.casted(?*anyopaque).Scalars, &buf_pointer);
-        ns.casted(usize).cast(?*anyopaque, in_int, out_pointer);
+        const in_int = ns.casted(usize).slices(&buf_int);
+        var buf_pointer: ns.casted(?*anyopaque).Slicable = undefined;
+        const out_pointer = ns.casted(?*anyopaque).slices(&buf_pointer);
+        ns.casted(usize).cast(?*anyopaque, &in_int, &out_pointer);
 
         for (&buf_pointer) |vec| {
             for (vec, 0..) |v, i| {
