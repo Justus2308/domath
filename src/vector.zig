@@ -32,7 +32,7 @@ pub fn namespace(comptime len: comptime_int, comptime Element: type) type {
 }
 
 pub const Config = struct {
-    batch_size: ?usize = null,
+    batch_size: ?comptime_int = null,
 };
 
 /// Create a namespace for vector math functions specialized on `len` and `Element` to live in.
@@ -45,7 +45,13 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
     return struct {
         const self = @This();
 
-        pub const vectors_per_op = config.batch_size orelse @as(usize, calcBatchSize(Element));
+        pub const vectors_per_op = if (config.batch_size) |batch_size| blk: {
+            if (batch_size <= 0) {
+                @compileError("batch size needs to be at least 1");
+            }
+            break :blk batch_size;
+        } else calcBatchSize(Element);
+
         const OpVec = @Vector(vectors_per_op, Element);
 
         pub const Scalars = [vectors_per_op]Element;
@@ -377,6 +383,36 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
 
+        pub const sin = switch (@typeInfo(Element)) {
+            .float => sinFloat,
+            else => sinUnimpl,
+        };
+        fn sinFloat(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+            for (in, out) |vec_in, vec_out| {
+                const opvec: OpVec = vec_in.*;
+                vec_out.* = @sin(opvec);
+            }
+        }
+        fn sinUnimpl(in: *const [len]*const Scalars, out: *const [len]*Scalars) void {
+            _ = .{ in, out };
+            @panic("sin is only implemented for floats");
+        }
+
+        pub const cos = switch (@typeInfo(Element)) {
+            .float => cosFloat,
+            else => cosUnimpl,
+        };
+        fn cosFloat(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+            for (in, out) |vec_in, vec_out| {
+                const opvec: OpVec = vec_in.*;
+                vec_out.* = @cos(opvec);
+            }
+        }
+        fn cosUnimpl(in: *const [len]*const Scalars, out: *const [len]*Scalars) void {
+            _ = .{ in, out };
+            @panic("cos is only implemented for floats");
+        }
+
         // Using `@select` here to effectively perform bitwise operations is a rather
         // unfortunate result of https://github.com/ziglang/zig/issues/14306, but
         // codegen seems to be fine anyways.
@@ -605,7 +641,7 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             return elems;
         }
 
-        pub fn swizzle(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars, order: [len]Dimension) void {
+        pub fn swizzle(comptime order: []const Dimension, noalias in: *const [len]*const Scalars, noalias out: *const [order.len]*Scalars) void {
             for (out, order) |vec_out, dim| {
                 const index = dimAsInt(dim);
                 assert(index < len);
@@ -616,7 +652,7 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         /// This works like an ALU with an accumulator register.
         /// The results always gets saved in an intermediary buffer and
         /// the user can either apply a transformation that works solely
-        /// based on this register or supply additional data for an
+        /// based off of this register or supply additional data for an
         /// operation that involves multiple inputs.
         pub const Accumulator = struct {
             buffer: Slicable,
@@ -678,6 +714,14 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             ) void {
                 const in = slices(&accu.buffer);
                 op.call(&in, extra_args, out);
+            }
+
+            pub fn cast(noalias accu: *Accumulator, comptime T: type) casted(T).Accumulator {
+                var casted_accu: casted(T).Accumulator = .{ .buffer = undefined };
+                const in = slices(&accu.buffer);
+                const out = casted(T).slices(&casted_accu.buffer);
+                self.cast(T, &in, &out);
+                return casted_accu;
             }
 
             pub const Op = struct {
@@ -763,6 +807,14 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                 pub const clamp = Op{
                     .kind = .uvw_to_v,
                     .fn_name = "clamp",
+                };
+                pub const sin = Op{
+                    .kind = .v_to_v,
+                    .fn_name = "sin",
+                };
+                pub const cos = Op{
+                    .kind = .v_to_v,
+                    .fn_name = "cos",
                 };
                 pub const move_towards = Op{
                     .kind = .vws_to_v,
@@ -1078,15 +1130,22 @@ test "swizzle" {
         ns.splatScalar(3),
     };
     const in = ns.slices(&in_buf);
-    var out_buf: ns.Slicable = undefined;
-    const out = ns.slices(&out_buf);
 
-    const order = [4]ns.Dimension{ .z, .z, .y, .w };
-    ns.swizzle(&in, &out, order);
+    inline for (.{
+        [2]ns.Dimension{ .z, .x },
+        [4]ns.Dimension{ .z, .z, .y, .w },
+        [6]ns.Dimension{ .w, .y, .x, .z, .w, .x },
+    }) |order| {
+        const tgt_ns = namespace(order.len, usize);
+        var out_buf: tgt_ns.Slicable = undefined;
+        const out = tgt_ns.slices(&out_buf);
 
-    for (out, order) |vec, expected| {
-        for (vec) |elem| {
-            try testing.expectEqual(@intFromEnum(expected), elem);
+        ns.swizzle(&order, &in, &out);
+
+        for (out, order) |vec, expected| {
+            for (vec) |elem| {
+                try testing.expectEqual(@intFromEnum(expected), elem);
+            }
         }
     }
 }
@@ -1121,7 +1180,7 @@ test "slices from MultiArrayList/Slice" {
     }
 }
 
-test "Accumulator basic usage" {
+test "Accumulator: basic usage" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, i32);
 
@@ -1129,7 +1188,7 @@ test "Accumulator basic usage" {
         const in1 = ns.slices(&buf1);
         const buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, i32, 10, 1));
         const in2 = ns.slices(&buf2);
-        const buf3: ns.Slicable = @splat(iota(ns.vectors_per_op, i32, 5, 1));
+        const buf3: ns.Slicable = @splat(iota(ns.vectors_per_op, i32, 5, 2));
         const in3 = ns.slices(&buf3);
         const factors: ns.Scalars = @splat(2);
         var out_buf: ns.Slicable = undefined;
@@ -1144,9 +1203,28 @@ test "Accumulator basic usage" {
                 const i: i32 = @intCast(idx);
                 var expected = i;
                 expected += (10 + i);
-                expected -= (5 + i);
+                expected -= (5 + (2 * i));
                 expected *= 2;
                 try testing.expectEqual(expected, elem);
+            }
+        }
+    }
+}
+
+test "Accumulator: casting" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+
+        const buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in1 = ns.slices(&buf1);
+        const buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 10, 1));
+        const in2 = ns.slices(&buf2);
+
+        var accu = ns.Accumulator.begin(.add, &in1, .{&in2});
+        const accu_casted = accu.cast(u32);
+        for (accu_casted.buffer) |vec| {
+            for (vec, 0..) |elem, i| {
+                try testing.expectEqual(elem, @as(u32, @intCast(i + 10 + i)));
             }
         }
     }
