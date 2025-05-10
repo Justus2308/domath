@@ -6,10 +6,25 @@
 
     .minimum_zig_version = "0.15.0-dev.375+8f8f37fb0",
 
+    // Only for benchmarks, the main module is completely dependency-free.
+    .dependencies = .{
+        .zbench = .{
+            .url = "https://github.com/hendriknielaender/zBench/archive/refs/tags/v0.10.0.tar.gz",
+            .hash = "zbench-0.10.0-YTdc714iAQDO4lTHMnIljYHPZ5v_sNTsw75vAmO1pyT-",
+            .lazy = true,
+        },
+        .zalgebra = .{
+            .url = "https://github.com/kooparse/zalgebra/archive/412c3e1cddcf6b8494a6c008dd152c6e0ec5e846.tar.gz",
+            .hash = "zalgebra-0.0.0-aaiVSk5nAQA4CIV_flm1iIpWiSrVcxggA9y_aaa-TtdR",
+            .lazy = true,
+        },
+    },
+
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "bench",
         "LICENSE",
     },
 }

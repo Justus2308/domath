@@ -88,6 +88,15 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
 
+        /// Generates an array of pointers suitable to pass as a vector batch from a `std.MultiArrayList`/`.Slice`.
+        pub fn fromMultiArrayList(list_or_slice: anytype, comptime field_names: [len]@Type(.enum_literal), offset: usize) [len]*Scalars {
+            var arr: [len]*Scalars = undefined;
+            inline for (&arr, field_names) |*a, tag| {
+                a.* = @ptrCast(list_or_slice.items(tag)[offset..][0..vectors_per_op]);
+            }
+            return arr;
+        }
+
         pub fn asIn(slice: []const Element, offset: usize) *const Scalars {
             return @ptrCast(slice[offset..][0..vectors_per_op]);
         }
@@ -601,6 +610,231 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                 vec_out.* = in.*[index].*;
             }
         }
+
+        pub const Op = enum {
+            add,
+            sub,
+            mul,
+            div,
+            div_allow_zero,
+            mod,
+            length,
+            length_sqrd,
+            normalize,
+            scale,
+            dot,
+            cross,
+            distance,
+            distance_sqrd,
+            invert,
+            negate,
+            min,
+            max,
+            clamp,
+            move_towards,
+
+            const Kind = enum {
+                v_to_v,
+                v_to_s,
+                vw_to_v,
+                vw_to_s,
+                vs_to_v,
+                vws_to_v,
+                uvw_to_v,
+            };
+            fn kind(comptime op: Op) Op.Kind {
+                comptime return switch (op) {
+                    .normalize, .invert, .negate => .v_to_v,
+                    .length, .length_sqrd => .v_to_s,
+                    .add, .sub, .mul, .div, .div_allow_zero, .mod, .min, .max => .vw_to_v,
+                    .dot, .distance, .distance_sqrd => .vw_to_s,
+                    .scale => .vs_to_v,
+                    .move_towards => .vws_to_v,
+                    .clamp => .uvw_to_v,
+                    .cross => switch (len) {
+                        2 => .vw_to_s,
+                        3 => .vw_to_v,
+                        else => @compileError("invalid op for len"),
+                    },
+                };
+            }
+
+            fn ExtraArgs(comptime op: Op) type {
+                return switch (op.kind()) {
+                    .v_to_v, .v_to_s => std.meta.Tuple(&.{*const [len]*const Scalars}),
+                    .vw_to_v, .vw_to_s => std.meta.Tuple(&.{ *const [len]*const Scalars, *const [len]*const Scalars }),
+                    .vs_to_v => std.meta.Tuple(&.{ *const [len]*const Scalars, *const Scalars }),
+                    .vws_to_v => std.meta.Tuple(&.{ *const [len]*const Scalars, *const [len]*const Scalars, *const Scalars }),
+                    .uvw_to_v => std.meta.Tuple(&.{ *const [len]*const Scalars, *const [len]*const Scalars, *const [len]*const Scalars }),
+                };
+            }
+
+            fn call(comptime op: Op, in: *const [len]*const Scalars, extra_args: op.ExtraArgs(), out: op.OutType()) void {
+                @call(.auto, switch (op) {
+                    .add => add,
+                    .sub => sub,
+                    .mul => mul,
+                    .div => div,
+                    .div_allow_zero => divAllowZero,
+                    .mod => mod,
+                    .lenght => lengths,
+                    .length_sqrd => lengthsSqrd,
+                    .normalize => normalize,
+                    .scale => scale,
+                    .dot => dots,
+                    .cross => cross,
+                    .distance => distances,
+                    .distance_sqrd => distancesSqrd,
+                    .invert => invert,
+                    .negate => negate,
+                    .min => min,
+                    .max => max,
+                    .clamp => clamp,
+                    .move_towards => moveTowards,
+                }, .{in} ++ extra_args ++ .{out});
+            }
+
+            fn call2(comptime op: Op, in: *const [len]*const Scalars, out: op.OutType()) void {
+                const opFn, const extra_args = switch (op) {
+                    .add => |accu| .{ add, .{accu} },
+                    .sub => |accu| .{ sub, .{accu} },
+                    .mul => |accu| .{ mul, .{accu} },
+                    .div => |accu| .{ div, .{accu} },
+                    .div_allow_zero => |accu| .{ divAllowZero, .{accu} },
+                    .mod => |accu| .{ mod, .{accu} },
+                    .length => .{ lengths, .{} },
+                    .length_sqrd => .{ lengthsSqrd, .{} },
+                    .normalize => .{ normalize, .{} },
+                    .scale => |accu| .{ scale, .{accu} },
+                    .dot => |accu| .{ dots, .{accu} },
+                    .cross => |accu| .{ cross, .{accu} },
+                    .distance => |accu| .{ distances, .{accu} },
+                    .distance_sqrd => |accu| .{ distancesSqrd, .{accu} },
+                    .invert => .{ invert, .{} },
+                    .negate => .{ negate, .{} },
+                    .min => |accu| .{ min, .{accu} },
+                    .max => |accu| .{ max, .{accu} },
+                    .clamp => |extra| .{ clamp, .{ extra.min, extra.max } },
+                    .move_towards => |extra| .{ moveTowards, .{ extra.target, extra.max_dist } },
+                };
+                @call(.auto, opFn, .{in} ++ extra_args ++ .{out});
+            }
+
+            fn OutType(comptime op: Op) type {
+                return switch (op.kind()) {
+                    .v_to_v, .vw_to_v, .vs_to_v, .uvw_to_v, .vws_to_v => *const [len]*Scalars,
+                    .v_to_s, .vw_to_s => *Scalars,
+                };
+            }
+
+            fn OutTypeNoPtr(comptime op: Op) type {
+                return switch (op.kind()) {
+                    .v_to_v, .vw_to_v, .vs_to_v, .uvw_to_v, .vws_to_v => [len]*Scalars,
+                    .v_to_s, .vw_to_s => *Scalars,
+                };
+            }
+
+            fn slicedOut(comptime op: Op, slicable: *Slicable) op.OutTypeNoPtr() {
+                const all = slices(slicable);
+                return switch (op.kind()) {
+                    .v_to_v, .vw_to_v, .vs_to_v, .uvw_to_v, .vws_to_v => all,
+                    .v_to_s, .vw_to_s => all[0],
+                };
+            }
+        };
+
+        /// This works like an ALU with an accumulator register.
+        /// The results always gets saved in an intermediary buffer and
+        /// the user can either apply a transformation that works solely
+        /// based on this register or accumulate additional data for an
+        /// operation that involves multiple vectors.
+        /// `out` needs to have the type required by the last element in `ops`.
+        pub fn chain(comptime ops: []const Op, in: *const [len]*const Scalars, out: ops[ops.len - 1].OutType()) void {
+            var bytes: Slicable = undefined;
+            const buf_v = slices(&bytes);
+            var buf_s = extractDim(&buf_v, @bitCast(@as(usize, 0)));
+
+            var buf_in = in;
+
+            buf_in = undefined;
+            buf_s = undefined;
+            _ = out;
+
+            inline for (ops) |op| {
+                switch (op.kind()) {
+                    .v_to_v => {
+                        op.call(buf_in, buf_v);
+                    },
+                    .v_to_s => {
+                        op.call(buf_in, .{}, buf_s);
+                    },
+                    .vw_to_v => {
+                        op.call(buf_in, .{});
+                    },
+                }
+            }
+        }
+
+        pub const Accumulator = struct {
+            buffers: struct { in: Slicable, out: Slicable },
+            input: *const [len]*const Scalars,
+            output: Output,
+
+            pub const Output = union(enum) {
+                scalars: *Scalars,
+                vectors: *const [len]*Scalars,
+            };
+
+            pub fn begin(
+                comptime op: Op,
+                noalias in: *const [len]*const Scalars,
+                noalias extra_args: op.ExtraArgs(),
+            ) Accumulator {
+                var accu = Accumulator{
+                    .buffers = undefined,
+                    .input = in,
+                    .output = undefined,
+                };
+                const out = slices(accu.buffer);
+                accu.exec(op, in, extra_args, &out);
+                return accu;
+            }
+
+            pub fn add(
+                noalias accu: *Accumulator,
+                comptime op: Op,
+                noalias extra_args: op.ExtraArgs(),
+            ) void {
+                const in = slices(accu.in_buffer);
+                const out = slices(accu.out_buffer);
+                accu.exec(op, &in, extra_args, &out);
+            }
+
+            pub fn end(
+                noalias accu: *Accumulator,
+                comptime op: Op,
+                noalias extra_args: op.ExtraArgs(),
+                noalias out: op.OutType(),
+            ) void {
+                const in = slices(accu.in_buffer);
+                accu.exec(op, &in, extra_args, out);
+            }
+
+            /// Sets `accu.output` to `out`.
+            fn exec(
+                noalias accu: *Accumulator,
+                comptime op: Op,
+                noalias in: *const [len]*const Scalars,
+                noalias extra_args: op.ExtraArgs(),
+                noalias out: op.OutType(),
+            ) void {
+                op.call(in, extra_args, out);
+                accu.output = switch (op.kind()) {
+                    .v_to_s, .vw_to_s => .{ .scalars = out },
+                    .v_to_v, .vw_to_v, .vs_to_v, .vws_to_v, .uvw_to_v => .{ .vectors = out },
+                };
+            }
+        };
     };
 }
 
@@ -872,6 +1106,36 @@ test "swizzle" {
     for (out, order) |vec, expected| {
         for (vec) |elem| {
             try testing.expectEqual(@intFromEnum(expected), elem);
+        }
+    }
+}
+
+test "slices from MultiArrayList/Slice" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, usize);
+        var list = std.MultiArrayList(struct { a: usize, b: usize, c: usize, d: usize }).empty;
+        defer list.deinit(testing.allocator);
+
+        const elem_count = (10 * ns.vectors_per_op);
+
+        try list.setCapacity(testing.allocator, elem_count);
+        for (0..elem_count) |i| {
+            list.appendAssumeCapacity(.{
+                .a = i,
+                .b = (2 * i),
+                .c = (3 * i),
+                .d = (4 * i),
+            });
+        }
+
+        var offset: usize = 0;
+        while (offset < elem_count) : (offset += ns.vectors_per_op) {
+            const in = ns.fromMultiArrayList(list.slice(), ([_]@Type(.enum_literal){ .a, .b, .c, .d })[0..len].*, offset);
+            for (in, 1..) |vec, c| {
+                for (vec, offset..) |elem, i| {
+                    try testing.expectEqual((c * i), elem);
+                }
+            }
         }
     }
 }
