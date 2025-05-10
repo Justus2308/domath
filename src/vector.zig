@@ -43,6 +43,8 @@ pub const Config = struct {
 pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, comptime config: Config) type {
     verifyElemType(Element);
     return struct {
+        const self = @This();
+
         pub const vectors_per_op = config.batch_size orelse @as(usize, calcBatchSize(Element));
         const OpVec = @Vector(vectors_per_op, Element);
 
@@ -611,229 +613,208 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
 
-        pub const Op = enum {
-            add,
-            sub,
-            mul,
-            div,
-            div_allow_zero,
-            mod,
-            length,
-            length_sqrd,
-            normalize,
-            scale,
-            dot,
-            cross,
-            distance,
-            distance_sqrd,
-            invert,
-            negate,
-            min,
-            max,
-            clamp,
-            move_towards,
-
-            const Kind = enum {
-                v_to_v,
-                v_to_s,
-                vw_to_v,
-                vw_to_s,
-                vs_to_v,
-                vws_to_v,
-                uvw_to_v,
-            };
-            fn kind(comptime op: Op) Op.Kind {
-                comptime return switch (op) {
-                    .normalize, .invert, .negate => .v_to_v,
-                    .length, .length_sqrd => .v_to_s,
-                    .add, .sub, .mul, .div, .div_allow_zero, .mod, .min, .max => .vw_to_v,
-                    .dot, .distance, .distance_sqrd => .vw_to_s,
-                    .scale => .vs_to_v,
-                    .move_towards => .vws_to_v,
-                    .clamp => .uvw_to_v,
-                    .cross => switch (len) {
-                        2 => .vw_to_s,
-                        3 => .vw_to_v,
-                        else => @compileError("invalid op for len"),
-                    },
-                };
-            }
-
-            fn ExtraArgs(comptime op: Op) type {
-                return switch (op.kind()) {
-                    .v_to_v, .v_to_s => std.meta.Tuple(&.{*const [len]*const Scalars}),
-                    .vw_to_v, .vw_to_s => std.meta.Tuple(&.{ *const [len]*const Scalars, *const [len]*const Scalars }),
-                    .vs_to_v => std.meta.Tuple(&.{ *const [len]*const Scalars, *const Scalars }),
-                    .vws_to_v => std.meta.Tuple(&.{ *const [len]*const Scalars, *const [len]*const Scalars, *const Scalars }),
-                    .uvw_to_v => std.meta.Tuple(&.{ *const [len]*const Scalars, *const [len]*const Scalars, *const [len]*const Scalars }),
-                };
-            }
-
-            fn call(comptime op: Op, in: *const [len]*const Scalars, extra_args: op.ExtraArgs(), out: op.OutType()) void {
-                @call(.auto, switch (op) {
-                    .add => add,
-                    .sub => sub,
-                    .mul => mul,
-                    .div => div,
-                    .div_allow_zero => divAllowZero,
-                    .mod => mod,
-                    .lenght => lengths,
-                    .length_sqrd => lengthsSqrd,
-                    .normalize => normalize,
-                    .scale => scale,
-                    .dot => dots,
-                    .cross => cross,
-                    .distance => distances,
-                    .distance_sqrd => distancesSqrd,
-                    .invert => invert,
-                    .negate => negate,
-                    .min => min,
-                    .max => max,
-                    .clamp => clamp,
-                    .move_towards => moveTowards,
-                }, .{in} ++ extra_args ++ .{out});
-            }
-
-            fn call2(comptime op: Op, in: *const [len]*const Scalars, out: op.OutType()) void {
-                const opFn, const extra_args = switch (op) {
-                    .add => |accu| .{ add, .{accu} },
-                    .sub => |accu| .{ sub, .{accu} },
-                    .mul => |accu| .{ mul, .{accu} },
-                    .div => |accu| .{ div, .{accu} },
-                    .div_allow_zero => |accu| .{ divAllowZero, .{accu} },
-                    .mod => |accu| .{ mod, .{accu} },
-                    .length => .{ lengths, .{} },
-                    .length_sqrd => .{ lengthsSqrd, .{} },
-                    .normalize => .{ normalize, .{} },
-                    .scale => |accu| .{ scale, .{accu} },
-                    .dot => |accu| .{ dots, .{accu} },
-                    .cross => |accu| .{ cross, .{accu} },
-                    .distance => |accu| .{ distances, .{accu} },
-                    .distance_sqrd => |accu| .{ distancesSqrd, .{accu} },
-                    .invert => .{ invert, .{} },
-                    .negate => .{ negate, .{} },
-                    .min => |accu| .{ min, .{accu} },
-                    .max => |accu| .{ max, .{accu} },
-                    .clamp => |extra| .{ clamp, .{ extra.min, extra.max } },
-                    .move_towards => |extra| .{ moveTowards, .{ extra.target, extra.max_dist } },
-                };
-                @call(.auto, opFn, .{in} ++ extra_args ++ .{out});
-            }
-
-            fn OutType(comptime op: Op) type {
-                return switch (op.kind()) {
-                    .v_to_v, .vw_to_v, .vs_to_v, .uvw_to_v, .vws_to_v => *const [len]*Scalars,
-                    .v_to_s, .vw_to_s => *Scalars,
-                };
-            }
-
-            fn OutTypeNoPtr(comptime op: Op) type {
-                return switch (op.kind()) {
-                    .v_to_v, .vw_to_v, .vs_to_v, .uvw_to_v, .vws_to_v => [len]*Scalars,
-                    .v_to_s, .vw_to_s => *Scalars,
-                };
-            }
-
-            fn slicedOut(comptime op: Op, slicable: *Slicable) op.OutTypeNoPtr() {
-                const all = slices(slicable);
-                return switch (op.kind()) {
-                    .v_to_v, .vw_to_v, .vs_to_v, .uvw_to_v, .vws_to_v => all,
-                    .v_to_s, .vw_to_s => all[0],
-                };
-            }
-        };
-
         /// This works like an ALU with an accumulator register.
         /// The results always gets saved in an intermediary buffer and
         /// the user can either apply a transformation that works solely
-        /// based on this register or accumulate additional data for an
-        /// operation that involves multiple vectors.
-        /// `out` needs to have the type required by the last element in `ops`.
-        pub fn chain(comptime ops: []const Op, in: *const [len]*const Scalars, out: ops[ops.len - 1].OutType()) void {
-            var bytes: Slicable = undefined;
-            const buf_v = slices(&bytes);
-            var buf_s = extractDim(&buf_v, @bitCast(@as(usize, 0)));
-
-            var buf_in = in;
-
-            buf_in = undefined;
-            buf_s = undefined;
-            _ = out;
-
-            inline for (ops) |op| {
-                switch (op.kind()) {
-                    .v_to_v => {
-                        op.call(buf_in, buf_v);
-                    },
-                    .v_to_s => {
-                        op.call(buf_in, .{}, buf_s);
-                    },
-                    .vw_to_v => {
-                        op.call(buf_in, .{});
-                    },
-                }
-            }
-        }
-
+        /// based on this register or supply additional data for an
+        /// operation that involves multiple inputs.
         pub const Accumulator = struct {
-            buffers: struct { in: Slicable, out: Slicable },
-            input: *const [len]*const Scalars,
-            output: Output,
+            buffer: Slicable,
 
-            pub const Output = union(enum) {
+            const Output = union(enum) {
                 scalars: *Scalars,
-                vectors: *const [len]*Scalars,
+                vectors: [len]*Scalars,
             };
 
             pub fn begin(
                 comptime op: Op,
-                noalias in: *const [len]*const Scalars,
-                noalias extra_args: op.ExtraArgs(),
+                noalias in: op.kind.in,
+                noalias extra_args: op.kind.extra,
             ) Accumulator {
-                var accu = Accumulator{
-                    .buffers = undefined,
-                    .input = in,
-                    .output = undefined,
+                comptime assert(op.kind.out != *Scalars);
+                var accu = Accumulator{ .buffer = undefined };
+                const out_raw: Output = switch (op.kind.out) {
+                    *Scalars => .{ .scalars = &accu.buffer[0] },
+                    *const [len]*Scalars => .{ .vectors = slices(&accu.buffer) },
+                    else => comptime unreachable,
                 };
-                const out = slices(accu.buffer);
-                accu.exec(op, in, extra_args, &out);
+                const out = switch (op.kind.out) {
+                    *Scalars => out_raw.scalars,
+                    *const [len]*Scalars => &out_raw.vectors,
+                    else => comptime unreachable,
+                };
+                op.call(in, extra_args, out);
                 return accu;
             }
 
             pub fn add(
                 noalias accu: *Accumulator,
                 comptime op: Op,
-                noalias extra_args: op.ExtraArgs(),
+                noalias extra_args: op.kind.extra,
             ) void {
-                const in = slices(accu.in_buffer);
-                const out = slices(accu.out_buffer);
-                accu.exec(op, &in, extra_args, &out);
+                comptime assert(op.kind.out != *Scalars);
+                const in = slices(&accu.buffer);
+                // TODO: find prettier solution
+                var tmp: Slicable = undefined;
+                const out_raw: Output = switch (op.kind.out) {
+                    *Scalars => .{ .scalars = &tmp[0] },
+                    *const [len]*Scalars => .{ .vectors = slices(&tmp) },
+                    else => comptime unreachable,
+                };
+                const out = switch (op.kind.out) {
+                    *Scalars => out_raw.scalars,
+                    *const [len]*Scalars => &out_raw.vectors,
+                    else => comptime unreachable,
+                };
+                op.call(&in, extra_args, out);
+                accu.buffer = tmp;
             }
 
             pub fn end(
                 noalias accu: *Accumulator,
                 comptime op: Op,
-                noalias extra_args: op.ExtraArgs(),
-                noalias out: op.OutType(),
+                noalias extra_args: op.kind.extra,
+                noalias out: op.kind.out,
             ) void {
-                const in = slices(accu.in_buffer);
-                accu.exec(op, &in, extra_args, out);
+                const in = slices(&accu.buffer);
+                op.call(&in, extra_args, out);
             }
 
-            /// Sets `accu.output` to `out`.
-            fn exec(
-                noalias accu: *Accumulator,
-                comptime op: Op,
-                noalias in: *const [len]*const Scalars,
-                noalias extra_args: op.ExtraArgs(),
-                noalias out: op.OutType(),
-            ) void {
-                op.call(in, extra_args, out);
-                accu.output = switch (op.kind()) {
-                    .v_to_s, .vw_to_s => .{ .scalars = out },
-                    .v_to_v, .vw_to_v, .vs_to_v, .vws_to_v, .uvw_to_v => .{ .vectors = out },
+            pub const Op = struct {
+                kind: Op.Kind,
+                fn_name: [:0]const u8,
+
+                pub const add = Op{
+                    .kind = .vw_to_v,
+                    .fn_name = "add",
                 };
-            }
+                pub const sub = Op{
+                    .kind = .vw_to_v,
+                    .fn_name = "sub",
+                };
+                pub const mul = Op{
+                    .kind = .vw_to_v,
+                    .fn_name = "mul",
+                };
+                pub const div = Op{
+                    .kind = .vw_to_v,
+                    .fn_name = "div",
+                };
+                pub const div_allow_zero = Op{
+                    .kind = .vw_to_v,
+                    .fn_name = "divAllowZero",
+                };
+                pub const mod = Op{
+                    .kind = .vw_to_v,
+                    .fn_name = "mod",
+                };
+                pub const length = Op{
+                    .kind = .v_to_s,
+                    .fn_name = "lengths",
+                };
+                pub const length_sqrd = Op{
+                    .kind = .v_to_s,
+                    .fn_name = "lengthsSqrd",
+                };
+                pub const normalize = Op{
+                    .kind = .v_to_v,
+                    .fn_name = "normalize",
+                };
+                pub const scale = Op{
+                    .kind = .vs_to_v,
+                    .fn_name = "scale",
+                };
+                pub const dot = Op{
+                    .kind = .vw_to_s,
+                    .fn_name = "dots",
+                };
+                pub const cross = Op{
+                    .kind = switch (len) {
+                        2 => .vw_to_s,
+                        3 => .vw_to_v,
+                        else => undefined,
+                    },
+                    .fn_name = "cross",
+                };
+                pub const distance = Op{
+                    .kind = .vw_to_s,
+                    .fn_name = "distances",
+                };
+                pub const distance_sqrd = Op{
+                    .kind = .vw_to_s,
+                    .fn_name = "distancesSqrd",
+                };
+                pub const invert = Op{
+                    .kind = .v_to_v,
+                    .fn_name = "invert",
+                };
+                pub const negate = Op{
+                    .kind = .v_to_v,
+                    .fn_name = "negate",
+                };
+                pub const min = Op{
+                    .kind = .vw_to_v,
+                    .fn_name = "min",
+                };
+                pub const max = Op{
+                    .kind = .vw_to_v,
+                    .fn_name = "max",
+                };
+                pub const clamp = Op{
+                    .kind = .uvw_to_v,
+                    .fn_name = "clamp",
+                };
+                pub const move_towards = Op{
+                    .kind = .vws_to_v,
+                    .fn_name = "moveTowards",
+                };
+
+                const Kind = struct {
+                    in: type,
+                    extra: type,
+                    out: type,
+
+                    pub const v_to_v = Kind{
+                        .in = *const [len]*const Scalars,
+                        .extra = std.meta.Tuple(&.{}),
+                        .out = *const [len]*Scalars,
+                    };
+                    pub const v_to_s = Kind{
+                        .in = *const [len]*const Scalars,
+                        .extra = std.meta.Tuple(&.{}),
+                        .out = *Scalars,
+                    };
+                    pub const vw_to_v = Kind{
+                        .in = *const [len]*const Scalars,
+                        .extra = std.meta.Tuple(&.{*const [len]*const Scalars}),
+                        .out = *const [len]*Scalars,
+                    };
+                    pub const vw_to_s = Kind{
+                        .in = *const [len]*const Scalars,
+                        .extra = std.meta.Tuple(&.{*const [len]*const Scalars}),
+                        .out = *Scalars,
+                    };
+                    pub const vs_to_v = Kind{
+                        .in = *const [len]*const Scalars,
+                        .extra = std.meta.Tuple(&.{*const Scalars}),
+                        .out = *const [len]*Scalars,
+                    };
+                    pub const vws_to_v = Kind{
+                        .in = *const [len]*const Scalars,
+                        .extra = std.meta.Tuple(&.{ *const [len]*const Scalars, *const Scalars }),
+                        .out = *const [len]*Scalars,
+                    };
+                    pub const uvw_to_v = Kind{
+                        .in = *const [len]*const Scalars,
+                        .extra = std.meta.Tuple(&.{ *const [len]*const Scalars, *const [len]*const Scalars }),
+                        .out = *const [len]*Scalars,
+                    };
+                };
+
+                fn call(comptime op: Op, in: op.kind.in, extra_args: op.kind.extra, out: op.kind.out) void {
+                    @call(.auto, @field(self, op.fn_name), .{in} ++ extra_args ++ .{out});
+                }
+            };
         };
     };
 }
@@ -1135,6 +1116,37 @@ test "slices from MultiArrayList/Slice" {
                 for (vec, offset..) |elem, i| {
                     try testing.expectEqual((c * i), elem);
                 }
+            }
+        }
+    }
+}
+
+test "Accumulator basic usage" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, i32);
+
+        const buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, i32, 0, 1));
+        const in1 = ns.slices(&buf1);
+        const buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, i32, 10, 1));
+        const in2 = ns.slices(&buf2);
+        const buf3: ns.Slicable = @splat(iota(ns.vectors_per_op, i32, 5, 1));
+        const in3 = ns.slices(&buf3);
+        const factors: ns.Scalars = @splat(2);
+        var out_buf: ns.Slicable = undefined;
+        const out = ns.slices(&out_buf);
+
+        var accu = ns.Accumulator.begin(.add, &in1, .{&in2});
+        accu.add(.sub, .{&in3});
+        accu.end(.scale, .{&factors}, &out);
+
+        for (out) |vec| {
+            for (vec, 0..) |elem, idx| {
+                const i: i32 = @intCast(idx);
+                var expected = i;
+                expected += (10 + i);
+                expected -= (5 + i);
+                expected *= 2;
+                try testing.expectEqual(expected, elem);
             }
         }
     }
