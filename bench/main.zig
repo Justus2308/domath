@@ -2,15 +2,19 @@ const std = @import("std");
 const domath = @import("domath");
 const zbench = @import("zbench");
 const zalgebra = @import("zalgebra");
+const zm = @import("zm");
+const zlm = @import("zlm");
 
 pub fn main() !void {
-    const gpa = std.heap.smp_allocator;
+    const allocator = std.heap.page_allocator;
 
-    var bench = zbench.Benchmark.init(gpa, .{ .time_budget_ns = 5e9 });
+    var bench = zbench.Benchmark.init(allocator, .{ .time_budget_ns = 5e9 });
     defer bench.deinit();
 
     try bench.add("domath: basic ops", benchDomathBasic, .{});
     try bench.add("zalgebra: basic ops", benchZalgebraBasic, .{});
+    try bench.add("zm: basic ops", benchZmBasic, .{});
+    try bench.add("zlm: basic ops", benchZlmBasic, .{});
 
     try bench.run(std.io.getStdOut().writer());
 }
@@ -61,5 +65,43 @@ fn benchZalgebraBasic(allocator: std.mem.Allocator) void {
 
     for (list_in.items, list_out.items) |vec_in, *vec_out| {
         vec_out.* = vec_in.norm();
+    }
+}
+
+fn benchZmBasic(allocator: std.mem.Allocator) void {
+    const List = std.ArrayListUnmanaged(zm.Vec4);
+
+    var list_in = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
+    defer list_in.deinit(allocator);
+    list_in.expandToCapacity();
+
+    var list_out = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
+    defer list_out.deinit(allocator);
+    list_out.expandToCapacity();
+
+    var rand = std.Random.DefaultPrng.init(0);
+    rand.fill(std.mem.sliceAsBytes(list_in.items));
+
+    for (list_in.items, list_out.items) |vec_in, *vec_out| {
+        vec_out.* = zm.vec.normalize(vec_in);
+    }
+}
+
+fn benchZlmBasic(allocator: std.mem.Allocator) void {
+    const List = std.ArrayListUnmanaged(zlm.Vec4);
+
+    var list_in = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
+    defer list_in.deinit(allocator);
+    list_in.expandToCapacity();
+
+    var list_out = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
+    defer list_out.deinit(allocator);
+    list_out.expandToCapacity();
+
+    var rand = std.Random.DefaultPrng.init(0);
+    rand.fill(std.mem.sliceAsBytes(list_in.items));
+
+    for (list_in.items, list_out.items) |vec_in, *vec_out| {
+        vec_out.* = vec_in.normalize();
     }
 }
