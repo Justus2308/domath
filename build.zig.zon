@@ -18,6 +18,16 @@
             .hash = "zalgebra-0.0.0-aaiVSk5nAQA4CIV_flm1iIpWiSrVcxggA9y_aaa-TtdR",
             .lazy = true,
         },
+        .zm = .{
+            .url = "https://github.com/griush/zm/archive/d3b2d90f9a1818f167abca40b7b708f9e9765638.tar.gz",
+            .hash = "zm-0.3.0-cLX-WbfMAAAlqyfozvJsnhWlHO1MdlkVajyEDi6OISgO",
+            .lazy = true,
+        },
+        .zlm = .{
+            .url = "https://github.com/nukkeldev/zlm/archive/eee4d72defe9ccf3d2a2064e51b9c3277d65faeb.tar.gz",
+            .hash = "zlm-0.1.0-3Ln-9rakAAA3v1BBTjN29hVDcl1Do032nWks1Wt50ucq",
+            .lazy = true,
+        },
     },
 
     .paths = .{

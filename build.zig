@@ -43,6 +43,18 @@ pub fn build(b: *std.Build) void {
     })) |dep| {
         bench.addImport("zalgebra", dep.module("zalgebra"));
     }
+    if (b.lazyDependency("zm", .{
+        .target = target,
+        .optimize = optimize,
+    })) |dep| {
+        bench.addImport("zm", dep.module("zm"));
+    }
+    if (b.lazyDependency("zlm", .{
+        .target = target,
+        .optimize = optimize,
+    })) |dep| {
+        bench.addImport("zlm", dep.module("zlm"));
+    }
 
     const bench_exe = b.addExecutable(.{
         .name = "bench",
