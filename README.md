@@ -38,10 +38,47 @@ exe.root_module.addImport("domath", domath_dependency.module("domath"));
 
 ### Use as a module in your code:
 
-The API is still a little contrived, so instead of an artificially constructed 'perfect' example here is some 
+Designing the API was/is quite challenging since C-like languages just really aren't designed for operating on multiple elements at once.
+
+I've tried to make using this library as convenient as possible by making interacting with `std.MultiArrayList` easy and providing an `Accumulator` that manages intermediary buffers for you when chaining operations.
 
 ```zig
 const std = @import("std");
 const domath = @import("domath");
 
+const v3 = domath.v3f32;
+
+var in_list = std.MultiArrayList(struct { a: f32, b: f32, i: usize, c: f32 }).empty;
+const factors = v3.splatScalar(2);
+
+// fill list with your data...
+
+var out_list = std.MultiArrayList(struct { x: f32, y: f32, z: f32 }).empty;
+try out_list.ensureTotalCapacity(std.heap.page_allocator, in_list.len);
+
+const in_slice = in_list.slice();
+const out_slice = out_list.slice();
+
+var offset: usize = 0;
+while (offset < in_list.len) : (offset += v3.vectors_per_op) {
+    const in = v3.fromMultiArrayList(in_slice, .{ .a, .b, .c }, offset);
+    const out = v3.fromMultiArrayList(out_slice, .{ .x, .y, .z }, offset);
+
+    var accu = v3.Accumulator.begin(.normalize, &in, .{});
+    accu.cont(.scale, .{&factors});
+    accu.end(.invert, .{}, &out);
+}
+
+// deal with remaining elements...
+
+// out_list(x, y, z) now contains in_list(a, b, c) but normalized, scaled by factors and inverted.
+
 ```
+
+If you want to manage your intermediary buffers yourself, there are also convenience functions/types available for working with those:
+
+- `Slicable` can hold exactly one batch of vector elements
+- `slices()` turns a pointer to a `Slicable` into an array of pointers to appropriate sub-slices
+- `Scalars` and `Bools` can hold exactly one batch of scalars/bools
+
+Conversion from one vector type to another is possible with `cast()` and `swizzle()`.

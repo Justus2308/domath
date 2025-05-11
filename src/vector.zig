@@ -236,11 +236,21 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             out.* = res;
         }
 
-        pub const cross = switch (len) {
-            2 => cross2,
-            3 => cross3,
-            else => crossUnimpl,
-        };
+        pub inline fn cross(
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
+            noalias out: switch (len) {
+                2 => *Scalars,
+                3 => *const [len]*Scalars,
+                else => *anyopaque,
+            },
+        ) void {
+            switch (len) {
+                2 => cross2(v_in, w_in, out),
+                3 => cross3(v_in, w_in, out),
+                else => @compileError("cross product is only implemented for len=2 and len=3"),
+            }
+        }
         fn cross2(
             noalias v_in: *const [len]*const Scalars,
             noalias w_in: *const [len]*const Scalars,
@@ -250,7 +260,6 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             const prod2 = (@as(OpVec, v_in[1].*) * @as(OpVec, w_in[0].*));
             out.* = (prod1 - prod2);
         }
-
         fn cross3(
             noalias v_in: *const [len]*const Scalars,
             noalias w_in: *const [len]*const Scalars,
@@ -267,15 +276,6 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             out[0].* = ((vy * wz) - (vz * wy));
             out[1].* = ((vz * wx) - (vx * wz));
             out[2].* = ((vx * wy) - (vy * wx));
-        }
-
-        fn crossUnimpl(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
-            out: anytype,
-        ) noreturn {
-            _ = .{ v_in, w_in, out };
-            @panic("cross product is only implemented for dim=2-3");
         }
 
         pub fn distances(
@@ -317,19 +317,17 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
 
-        pub const negate = switch (@typeInfo(Element)) {
-            .float, .int => negateImpl,
-            else => negateUnimpl,
-        };
+        pub inline fn negate(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+            switch (@typeInfo(Element)) {
+                .float, .int => negateImpl(in, out),
+                else => @compileError("cannot negate element type"),
+            }
+        }
         fn negateImpl(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             for (in, out) |vec_in, vec_out| {
                 const opvec: OpVec = vec_in.*;
                 vec_out.* = -opvec;
             }
-        }
-        fn negateUnimpl(in: *const [len]*const Scalars, out: *const [len]*Scalars) void {
-            _ = .{ in, out };
-            @panic("cannot negate element type");
         }
 
         pub fn lerp(
@@ -383,39 +381,57 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             }
         }
 
-        pub const sin = switch (@typeInfo(Element)) {
-            .float => sinFloat,
-            else => sinUnimpl,
-        };
+        pub inline fn sin(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+            switch (@typeInfo(Element)) {
+                .float => sinFloat(in, out),
+                else => @compileError("sin is only implemented for floats"),
+            }
+        }
         fn sinFloat(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             for (in, out) |vec_in, vec_out| {
                 const opvec: OpVec = vec_in.*;
                 vec_out.* = @sin(opvec);
             }
         }
-        fn sinUnimpl(in: *const [len]*const Scalars, out: *const [len]*Scalars) void {
-            _ = .{ in, out };
-            @panic("sin is only implemented for floats");
-        }
 
-        pub const cos = switch (@typeInfo(Element)) {
-            .float => cosFloat,
-            else => cosUnimpl,
-        };
+        pub inline fn cos(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+            switch (@typeInfo(Element)) {
+                .float => cosFloat(in, out),
+                else => @compileError("cos is only implemented for floats"),
+            }
+        }
         fn cosFloat(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
             for (in, out) |vec_in, vec_out| {
                 const opvec: OpVec = vec_in.*;
                 vec_out.* = @cos(opvec);
             }
         }
-        fn cosUnimpl(in: *const [len]*const Scalars, out: *const [len]*Scalars) void {
-            _ = .{ in, out };
-            @panic("cos is only implemented for floats");
+
+        pub inline fn abs(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+            switch (@typeInfo(Element)) {
+                .float, .int => absImpl(in, out),
+                else => @compileError("cannot take absolute value of element type"),
+            }
+        }
+        fn absImpl(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+            for (in, out) |vec_in, vec_out| {
+                const opvec: OpVec = vec_in.*;
+                vec_out.* = @abs(opvec);
+            }
         }
 
         // Using `@select` here to effectively perform bitwise operations is a rather
         // unfortunate result of https://github.com/ziglang/zig/issues/14306, but
         // codegen seems to be fine anyways.
+
+        const BoolVec = @Vector(vectors_per_op, bool);
+
+        inline fn vAnd(v1: BoolVec, v2: BoolVec) BoolVec {
+            return @select(bool, v1, v2, v1);
+        }
+        inline fn vOr(v1: BoolVec, v2: BoolVec) BoolVec {
+            return @select(bool, v1, v1, v2);
+        }
 
         pub fn moveTowards(
             noalias v_in: *const [len]*const Scalars,
@@ -434,13 +450,7 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
 
             const max_dists: OpVec = max_dist_in.*;
 
-            const pred_and1 = (max_dists >= zeroes_vec);
-            const pred_and2 = (dists <= max_dists);
-
-            const pred_or1 = (dists == zeroes_vec);
-            const pred_or2 = @select(bool, pred_and1, pred_and2, pred_and1); // and
-
-            const is_at_target = @select(bool, pred_or1, pred_or1, pred_or2); // or
+            const is_at_target = vOr((dists == zeroes_vec), vAnd((max_dists >= zeroes_vec), (dists <= max_dists)));
 
             for (v_in, target_in, out) |vec_in, target, vec_out| {
                 const opvec: OpVec = vec_in.*;
@@ -452,82 +462,89 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         }
 
         pub fn eql(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
             noalias out: *Bools,
         ) void {
-            var res: @Vector(vectors_per_op, bool) = @splat(true);
+            var res: BoolVec = @splat(true);
             for (v_in, w_in) |vec1, vec2| {
                 const opv1: OpVec = vec1.*;
                 const opv2: OpVec = vec2.*;
 
-                const pred = (opv1 == opv2);
-                res = @select(bool, pred, res, pred);
+                res = vAnd((opv1 == opv2), res);
             }
             out.* = res;
         }
 
-        pub const approxEqAbs = switch (@typeInfo(Element)) {
-            .float => approxEqAbsFloat,
-            else => approxEqUnimpl,
-        };
-        pub const approxEqRel = switch (@typeInfo(Element)) {
-            .float => approxEqRelFloat,
-            else => approxEqUnimpl,
-        };
-
-        fn approxEqAbsFloat(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
-            tolerances_in: *const Scalars,
+        pub inline fn approxEqAbs(
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
+            noalias tolerances: *const Scalars,
             noalias out: *Bools,
         ) void {
-            assert(@reduce(.Min, tolerances_in) >= 0.0);
+            switch (@typeInfo(Element)) {
+                .float => approxEqAbsFloat(v_in, w_in, tolerances, out),
+                else => @compileError("approxEqAbs is only available for float vectors"),
+            }
+        }
+        fn approxEqAbsFloat(
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
+            noalias tolerances: *const Scalars,
+            noalias out: *Bools,
+        ) void {
+            const optol: OpVec = tolerances.*;
+            assert(@reduce(.Min, optol) >= 0.0);
 
-            var res: @Vector((vectors_per_op / 8), u8) = @splat(@intFromBool(true));
-            for (v_in, w_in, tolerances_in) |vec1, vec2, tolerance| {
+            var res: BoolVec = @splat(true);
+            for (v_in, w_in) |vec1, vec2| {
                 const opv1: OpVec = vec1.*;
                 const opv2: OpVec = vec2.*;
-                const optol: OpVec = tolerance.*;
 
-                const pred = (@abs(opv1 - opv2) <= optol);
-                res = @select(bool, pred, res, pred);
+                res = vAnd((@abs(opv1 - opv2) <= optol), res);
             }
             out.* = res;
+        }
+
+        pub inline fn approxEqRel(
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
+            noalias tolerances: *const Scalars,
+            noalias out: *Bools,
+        ) void {
+            switch (@typeInfo(Element)) {
+                .float => approxEqRelFloat(v_in, w_in, tolerances, out),
+                else => @compileError("approxEqRel is only available for float vectors"),
+            }
         }
         fn approxEqRelFloat(
-            v_in: *const [len]*const Scalars,
-            w_in: *const [len]*const Scalars,
-            tolerances_in: *const Scalars,
+            noalias v_in: *const [len]*const Scalars,
+            noalias w_in: *const [len]*const Scalars,
+            noalias tolerances: *const Scalars,
             noalias out: *Bools,
         ) void {
-            assert(@reduce(.Min, tolerances_in) > 0.0);
+            const optol: OpVec = tolerances.*;
+            assert(@reduce(.Min, optol) > 0.0);
 
-            var res: @Vector(vectors_per_op, bool) = @splat(true);
-            for (v_in, w_in, tolerances_in) |vec1, vec2, tolerance| {
+            var res: BoolVec = @splat(true);
+            for (v_in, w_in) |vec1, vec2| {
                 const opv1: OpVec = vec1.*;
                 const opv2: OpVec = vec2.*;
-                const optol: OpVec = tolerance.*;
 
                 const rel_tolerance = (@max(@abs(opv1), @abs(opv2)) * optol);
-                const pred = (@abs(opv1 - opv2) <= rel_tolerance);
-                res = @select(bool, pred, res, pred);
+                res = vAnd((@abs(opv1 - opv2) <= rel_tolerance), res);
             }
             out.* = res;
-        }
-        fn approxEqUnimpl(
-            _: *const [len]*const Scalars,
-            _: *const [len]*const Scalars,
-            _: *const Scalars,
-            _: *Bools,
-        ) void {
-            @panic("approxEq functions are only available for float vectors");
         }
 
         pub fn casted(comptime T: type) type {
             return namespaceWithConfig(len, T, .{ .batch_size = vectors_per_op });
         }
-        pub fn cast(comptime T: type, in: *const [len]*const Scalars, out: *const [len]*casted(T).Scalars) void {
+        pub fn cast(
+            comptime T: type,
+            noalias in: *const [len]*const Scalars,
+            noalias out: *const [len]*casted(T).Scalars,
+        ) void {
             for (in, out) |vec_in, vec_out| {
                 const opvec: OpVec = vec_in.*;
                 vec_out.* = @as(casted(T).OpVec, switch (@typeInfo(Element)) {
@@ -621,13 +638,17 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             else => usize,
         };
         inline fn dimAsInt(dimension: Dimension) usize {
-            return if (len <= 4) @intFromEnum(dimension) else dimension;
+            if (len <= 4) {
+                return @intFromEnum(dimension);
+            } else {
+                assert(dimension < len);
+                return dimension;
+            }
         }
 
         /// Extract a single dimension from `in`.
         pub inline fn extractDim(noalias in: anytype, dimension: Dimension) ScalarsPtrType(@TypeOf(in)) {
             const index = dimAsInt(dimension);
-            assert(index < len);
             return in.*[index];
         }
 
@@ -641,11 +662,16 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             return elems;
         }
 
-        pub fn swizzle(comptime order: []const Dimension, noalias in: *const [len]*const Scalars, noalias out: *const [order.len]*Scalars) void {
-            for (out, order) |vec_out, dim| {
+        pub fn swizzle(comptime layout: []const Dimension, noalias in: *const [len]*const Scalars, noalias out: *const [layout.len]*Scalars) void {
+            for (out, layout) |vec_out, dim| {
                 const index = dimAsInt(dim);
-                assert(index < len);
                 vec_out.* = in.*[index].*;
+            }
+        }
+
+        fn noop(noalias in: *const [len]*const Scalars, noalias out: *const [len]*Scalars) void {
+            for (in, out) |vec_in, vec_out| {
+                vec_out.* = vec_in.*;
             }
         }
 
@@ -683,7 +709,7 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                 return accu;
             }
 
-            pub fn add(
+            pub fn cont(
                 noalias accu: *Accumulator,
                 comptime op: Op,
                 noalias extra_args: op.kind.extra,
@@ -821,6 +847,15 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                     .fn_name = "moveTowards",
                 };
 
+                /// This just loads the input into the `Accumulator` buffer,
+                /// if you feel the need to use this you probably don't need
+                ///  an `Accumulator` in the first place.
+                /// Mainly for testing purposes.
+                pub const noop = Op{
+                    .kind = .v_to_v,
+                    .fn_name = "noop",
+                };
+
                 const Kind = struct {
                     in: type,
                     extra: type,
@@ -918,7 +953,7 @@ test "normalize + scale roundtrip" {
 
         for (buf, scaled_buf) |orig, result| {
             for (orig, result) |a, b| {
-                try testing.expectApproxEqAbs(a, b, 0.01);
+                try testing.expectApproxEqRel(a, b, std.math.floatEps(f32));
             }
         }
     }
@@ -1007,6 +1042,30 @@ test "cross 3D" {
     }
 }
 
+test "min/max" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+        const buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 2));
+        const in1 = ns.slices(&buf1);
+        const buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 2, 1));
+        const in2 = ns.slices(&buf2);
+        var out_buf_min: ns.Slicable = undefined;
+        const out_min = ns.slices(&out_buf_min);
+        var out_buf_max: ns.Slicable = undefined;
+        const out_max = ns.slices(&out_buf_max);
+
+        ns.min(&in1, &in2, &out_min);
+        ns.max(&in1, &in2, &out_max);
+
+        for (in1, in2, out_min, out_max) |vec1, vec2, vecmin, vecmax| {
+            for (vec1, vec2, vecmin, vecmax) |a, b, rmin, rmax| {
+                try testing.expectEqual(@min(a, b), rmin);
+                try testing.expectEqual(@max(a, b), rmax);
+            }
+        }
+    }
+}
+
 test "moveTowards" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
@@ -1060,6 +1119,37 @@ test "eql" {
         }
         for ((ns.vectors_per_op / 2)..ns.vectors_per_op) |i| {
             try testing.expectEqual(false, out[i]);
+        }
+    }
+}
+
+test "approx eql" {
+    // Checks for the infamous 0.1 + 0.2 != 0.3
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f64);
+        const buf1: ns.Slicable = @splat(ns.splatScalar(0.1));
+        const in1 = ns.slices(&buf1);
+        const buf2: ns.Slicable = @splat(ns.splatScalar(0.2));
+        const in2 = ns.slices(&buf2);
+        const expected_buf: ns.Slicable = @splat(ns.splatScalar(0.3));
+        const expected = ns.slices(&expected_buf);
+        var buf_out: ns.Slicable = undefined;
+        const out = ns.slices(&buf_out);
+        const tols: ns.Scalars = @splat(std.math.floatEps(f64));
+        var exact: ns.Bools = undefined;
+        var approx_abs: ns.Bools = undefined;
+        var approx_rel: ns.Bools = undefined;
+
+        ns.add(&in1, &in2, &out);
+
+        ns.eql(&out, &expected, &exact);
+        ns.approxEqAbs(&out, &expected, &tols, &approx_abs);
+        ns.approxEqRel(&out, &expected, &tols, &approx_rel);
+
+        for (exact, approx_abs, approx_rel) |ex, ab, rl| {
+            try testing.expectEqual(false, ex);
+            try testing.expectEqual(true, ab);
+            try testing.expectEqual(true, rl);
         }
     }
 }
@@ -1135,16 +1225,16 @@ test "swizzle" {
         [2]ns.Dimension{ .z, .x },
         [4]ns.Dimension{ .z, .z, .y, .w },
         [6]ns.Dimension{ .w, .y, .x, .z, .w, .x },
-    }) |order| {
-        const tgt_ns = namespace(order.len, usize);
+    }) |layout| {
+        const tgt_ns = namespace(layout.len, usize);
         var out_buf: tgt_ns.Slicable = undefined;
         const out = tgt_ns.slices(&out_buf);
 
-        ns.swizzle(&order, &in, &out);
+        ns.swizzle(&layout, &in, &out);
 
-        for (out, order) |vec, expected| {
+        for (out, layout) |vec, expected| {
             for (vec) |elem| {
-                try testing.expectEqual(@intFromEnum(expected), elem);
+                try testing.expectEqual(ns.dimAsInt(expected), elem);
             }
         }
     }
@@ -1195,7 +1285,8 @@ test "Accumulator: basic usage" {
         const out = ns.slices(&out_buf);
 
         var accu = ns.Accumulator.begin(.add, &in1, .{&in2});
-        accu.add(.sub, .{&in3});
+        accu.cont(.sub, .{&in3});
+        accu.cont(.noop, .{});
         accu.end(.scale, .{&factors}, &out);
 
         for (out) |vec| {
@@ -1215,16 +1306,67 @@ test "Accumulator: casting" {
     inline for (.{ 2, 3, 4 }) |len| {
         const ns = namespace(len, f32);
 
-        const buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
-        const in1 = ns.slices(&buf1);
-        const buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 10, 1));
-        const in2 = ns.slices(&buf2);
+        const buf: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in = ns.slices(&buf);
 
-        var accu = ns.Accumulator.begin(.add, &in1, .{&in2});
+        var accu = ns.Accumulator.begin(.noop, &in, .{});
         const accu_casted = accu.cast(u32);
         for (accu_casted.buffer) |vec| {
             for (vec, 0..) |elem, i| {
-                try testing.expectEqual(elem, @as(u32, @intCast(i + 10 + i)));
+                try testing.expectEqual(elem, @as(u32, @intCast(i)));
+            }
+        }
+    }
+}
+
+test "Accumulator: multiple extra args" {
+    inline for (.{ 2, 3, 4 }) |len| {
+        const ns = namespace(len, f32);
+
+        const buf1: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 10, 2));
+        const in1 = ns.slices(&buf1);
+        const buf2: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 0, 1));
+        const in2 = ns.slices(&buf2);
+
+        const cmin_val = 12.0;
+        const cmin_buf: ns.Slicable = @splat(@splat(cmin_val));
+        const cmin = ns.slices(&cmin_buf);
+
+        const cmax_val = 30.0;
+        const cmax_buf: ns.Slicable = @splat(@splat(cmax_val));
+        const cmax = ns.slices(&cmax_buf);
+
+        const tgt_buf: ns.Slicable = @splat(iota(ns.vectors_per_op, f32, 1000, 300));
+        const tgt = ns.slices(&tgt_buf);
+        const maxd: ns.Scalars = @splat(5.0);
+        var out_buf: ns.Slicable = undefined;
+        const out = ns.slices(&out_buf);
+
+        var accu = ns.Accumulator.begin(.add, &in1, .{&in2});
+        accu.cont(.clamp, .{ &cmin, &cmax });
+        accu.end(.move_towards, .{ &tgt, &maxd }, &out);
+
+        for (0..ns.vectors_per_op) |j| {
+            var dist_sqrd: f32 = 0;
+            for (0..len) |i| {
+                const start = std.math.clamp((buf1[i][j] + buf2[i][j]), cmin_val, cmax_val);
+                const target = tgt_buf[i][j];
+                const d = (target - start);
+                dist_sqrd += (d * d);
+            }
+            const dist = @sqrt(dist_sqrd);
+            if (dist == 0 or dist <= 5.0) {
+                for (0..len) |i| {
+                    const expected = tgt_buf[i][j];
+                    try testing.expectEqual(expected, out_buf[i][j]);
+                }
+            }
+            for (0..len) |i| {
+                const start = std.math.clamp((buf1[i][j] + buf2[i][j]), cmin_val, cmax_val);
+                const target = tgt_buf[i][j];
+                const d = (target - start);
+                const expected = (start + ((d / dist) * 5.0));
+                try testing.expectEqual(expected, out_buf[i][j]);
             }
         }
     }
