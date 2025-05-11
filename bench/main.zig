@@ -1,107 +1,60 @@
 const std = @import("std");
-const domath = @import("domath");
 const zbench = @import("zbench");
-const zalgebra = @import("zalgebra");
-const zm = @import("zm");
-const zlm = @import("zlm");
+
+pub const vec_count = (1 << 20);
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
+    const writer = std.io.getStdOut().writer();
 
+    try runBenchmarks("normalize4", allocator, writer);
+    try runBenchmarks("scaleByLen3", allocator, writer);
+    try runBenchmarks("multiplyAddNegate2", allocator, writer);
+    try runBenchmarks("crossLerp3", allocator, writer);
+}
+
+const candidates = struct {
+    pub const domath = @import("domath.zig");
+    pub const zalgebra = @import("zalgebra.zig");
+    pub const zm = @import("zm.zig");
+    pub const zlm = @import("zlm.zig");
+};
+
+fn runBenchmarks(comptime name: [:0]const u8, allocator: std.mem.Allocator, writer: anytype) !void {
     var bench = zbench.Benchmark.init(allocator, .{ .time_budget_ns = 5e9 });
     defer bench.deinit();
 
-    try bench.add("domath: basic ops", benchDomathBasic, .{});
-    try bench.add("zalgebra: basic ops", benchZalgebraBasic, .{});
-    try bench.add("zm: basic ops", benchZmBasic, .{});
-    try bench.add("zlm: basic ops", benchZlmBasic, .{});
+    inline for (comptime std.meta.declarations(candidates)) |decl| {
+        const candidate = @field(candidates, decl.name);
+        try bench.add(decl.name ++ ": " ++ name ++ "", @field(candidate, name), .{});
+    }
 
-    try bench.run(std.io.getStdOut().writer());
+    try bench.run(writer);
 }
 
-const basic_vec_count = (1 << 20);
-
-fn benchDomathBasic(allocator: std.mem.Allocator) void {
-    const v4 = domath.v4f32;
-    const List = std.MultiArrayList(struct { x: f32, y: f32, z: f32, w: f32 });
-
-    var list_in = List.empty;
-    defer list_in.deinit(allocator);
-    list_in.setCapacity(allocator, basic_vec_count) catch @panic("OOM");
-    list_in.len = basic_vec_count;
-
-    var list_out = List.empty;
-    defer list_out.deinit(allocator);
-    list_out.setCapacity(allocator, basic_vec_count) catch @panic("OOM");
-    list_out.len = basic_vec_count;
-
-    var rand = std.Random.DefaultPrng.init(0);
-    rand.fill(list_in.bytes[0..List.capacityInBytes(basic_vec_count)]);
-
-    const slice_in = list_in.slice();
-    const slice_out = list_out.slice();
-
-    var offset: usize = 0;
-    while (offset < basic_vec_count) : (offset += v4.vectors_per_op) {
-        const in = v4.fromMultiArrayList(slice_in, .{ .x, .y, .z, .w }, offset);
-        const out = v4.fromMultiArrayList(slice_out, .{ .x, .y, .z, .w }, offset);
-        v4.normalize(&in, &out);
-    }
+pub noinline fn getRandomArrayList(comptime T: type, allocator: std.mem.Allocator, seed: u64) std.ArrayListUnmanaged(T) {
+    const list = getUndefArrayList(T, allocator);
+    var rand = std.Random.DefaultPrng.init(seed);
+    rand.fill(std.mem.sliceAsBytes(list.items));
+    return list;
 }
 
-fn benchZalgebraBasic(allocator: std.mem.Allocator) void {
-    const List = std.ArrayListUnmanaged(zalgebra.Vec4);
-
-    var list_in = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
-    defer list_in.deinit(allocator);
-    list_in.expandToCapacity();
-
-    var list_out = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
-    defer list_out.deinit(allocator);
-    list_out.expandToCapacity();
-
-    var rand = std.Random.DefaultPrng.init(0);
-    rand.fill(std.mem.sliceAsBytes(list_in.items));
-
-    for (list_in.items, list_out.items) |vec_in, *vec_out| {
-        vec_out.* = vec_in.norm();
-    }
+pub noinline fn getUndefArrayList(comptime T: type, allocator: std.mem.Allocator) std.ArrayListUnmanaged(T) {
+    var list = std.ArrayListUnmanaged(T).initCapacity(allocator, vec_count) catch @panic("OOM");
+    list.expandToCapacity();
+    return list;
 }
 
-fn benchZmBasic(allocator: std.mem.Allocator) void {
-    const List = std.ArrayListUnmanaged(zm.Vec4);
-
-    var list_in = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
-    defer list_in.deinit(allocator);
-    list_in.expandToCapacity();
-
-    var list_out = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
-    defer list_out.deinit(allocator);
-    list_out.expandToCapacity();
-
-    var rand = std.Random.DefaultPrng.init(0);
-    rand.fill(std.mem.sliceAsBytes(list_in.items));
-
-    for (list_in.items, list_out.items) |vec_in, *vec_out| {
-        vec_out.* = zm.vec.normalize(vec_in);
-    }
+pub noinline fn getRandomMultiArrayList(comptime T: type, allocator: std.mem.Allocator, seed: u64) std.MultiArrayList(T) {
+    const list = getUndefMultiArrayList(T, allocator);
+    var rand = std.Random.DefaultPrng.init(seed);
+    rand.fill(list.bytes[0..@TypeOf(list).capacityInBytes(vec_count)]);
+    return list;
 }
 
-fn benchZlmBasic(allocator: std.mem.Allocator) void {
-    const List = std.ArrayListUnmanaged(zlm.Vec4);
-
-    var list_in = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
-    defer list_in.deinit(allocator);
-    list_in.expandToCapacity();
-
-    var list_out = List.initCapacity(allocator, basic_vec_count) catch @panic("OOM");
-    defer list_out.deinit(allocator);
-    list_out.expandToCapacity();
-
-    var rand = std.Random.DefaultPrng.init(0);
-    rand.fill(std.mem.sliceAsBytes(list_in.items));
-
-    for (list_in.items, list_out.items) |vec_in, *vec_out| {
-        vec_out.* = vec_in.normalize();
-    }
+pub noinline fn getUndefMultiArrayList(comptime T: type, allocator: std.mem.Allocator) std.MultiArrayList(T) {
+    var list = std.MultiArrayList(T).empty;
+    list.setCapacity(allocator, vec_count) catch @panic("OOM");
+    list.len = vec_count;
+    return list;
 }

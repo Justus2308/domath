@@ -336,10 +336,11 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
             noalias amount_in: *const Scalars,
             noalias out: *const [len]*Scalars,
         ) void {
+            const opamount: OpVec = amount_in.*;
             for (v_in, w_in, out) |vec1_in, vec2_in, vec_out| {
                 const opv1: OpVec = vec1_in.*;
                 const opv2: OpVec = vec2_in.*;
-                vec_out.* = (opv1 + ((opv2 - opv1) * amount_in));
+                vec_out.* = (opv1 + ((opv2 - opv1) * opamount));
             }
         }
 
@@ -479,21 +480,21 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         pub inline fn approxEqAbs(
             noalias v_in: *const [len]*const Scalars,
             noalias w_in: *const [len]*const Scalars,
-            noalias tolerances: *const Scalars,
+            noalias tolerances_in: *const Scalars,
             noalias out: *Bools,
         ) void {
             switch (@typeInfo(Element)) {
-                .float => approxEqAbsFloat(v_in, w_in, tolerances, out),
+                .float => approxEqAbsFloat(v_in, w_in, tolerances_in, out),
                 else => @compileError("approxEqAbs is only available for float vectors"),
             }
         }
         fn approxEqAbsFloat(
             noalias v_in: *const [len]*const Scalars,
             noalias w_in: *const [len]*const Scalars,
-            noalias tolerances: *const Scalars,
+            noalias tolerances_in: *const Scalars,
             noalias out: *Bools,
         ) void {
-            const optol: OpVec = tolerances.*;
+            const optol: OpVec = tolerances_in.*;
             assert(@reduce(.Min, optol) >= 0.0);
 
             var res: BoolVec = @splat(true);
@@ -509,21 +510,21 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         pub inline fn approxEqRel(
             noalias v_in: *const [len]*const Scalars,
             noalias w_in: *const [len]*const Scalars,
-            noalias tolerances: *const Scalars,
+            noalias tolerances_in: *const Scalars,
             noalias out: *Bools,
         ) void {
             switch (@typeInfo(Element)) {
-                .float => approxEqRelFloat(v_in, w_in, tolerances, out),
+                .float => approxEqRelFloat(v_in, w_in, tolerances_in, out),
                 else => @compileError("approxEqRel is only available for float vectors"),
             }
         }
         fn approxEqRelFloat(
             noalias v_in: *const [len]*const Scalars,
             noalias w_in: *const [len]*const Scalars,
-            noalias tolerances: *const Scalars,
+            noalias tolerances_in: *const Scalars,
             noalias out: *Bools,
         ) void {
-            const optol: OpVec = tolerances.*;
+            const optol: OpVec = tolerances_in.*;
             assert(@reduce(.Min, optol) > 0.0);
 
             var res: BoolVec = @splat(true);
@@ -845,6 +846,10 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                 pub const move_towards = Op{
                     .kind = .vws_to_v,
                     .fn_name = "moveTowards",
+                };
+                pub const lerp = Op{
+                    .kind = .vws_to_v,
+                    .fn_name = "lerp",
                 };
 
                 /// This just loads the input into the `Accumulator` buffer,
