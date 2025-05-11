@@ -73,7 +73,6 @@ while (offset < in_list.len) : (offset += v3.vectors_per_op) {
 // deal with remaining elements...
 
 // out_list(x, y, z) now contains in_list(a, b, c) but normalized, scaled by factors and inverted.
-
 ```
 
 If you want to manage your intermediary buffers yourself, there are also convenience functions/types available for working with those:
@@ -83,6 +82,8 @@ If you want to manage your intermediary buffers yourself, there are also conveni
 - `Scalars` and `Bools` can hold exactly one batch of scalars/bools
 
 Conversion from one vector type to another is possible with `cast()` and `swizzle()`.
+
+Further usage examples are in [`bench/domath.zig`](bench/domath.zig) and the tests in [`src/vector.zig`](src/vector.zig).
 
 ## Benchmarks
 
