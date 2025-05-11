@@ -47,20 +47,17 @@ pub fn multiplyAddNegate2(allocator: std.mem.Allocator) void {
     }
 }
 
-pub fn crossLerp3(allocator: std.mem.Allocator) void {
+pub fn cross3(allocator: std.mem.Allocator) void {
     var list_in1 = root.getRandomArrayList(zalgebra.Vec3, allocator, 0);
     defer list_in1.deinit(allocator);
 
     var list_in2 = root.getRandomArrayList(zalgebra.Vec3, allocator, 100);
     defer list_in2.deinit(allocator);
 
-    var list_in3 = root.getRandomArrayList(zalgebra.Vec3, allocator, 1000);
-    defer list_in3.deinit(allocator);
-
     var list_out = root.getUndefArrayList(zalgebra.Vec3, allocator);
     defer list_out.deinit(allocator);
 
-    for (list_in1.items, list_in2.items, list_in3.items, list_out.items) |vec_in1, vec_in2, vec_in3, *vec_out| {
-        vec_out.* = vec_in1.cross(vec_in2).lerp(vec_in3, 2.0);
+    for (list_in1.items, list_in2.items, list_out.items) |vec_in1, vec_in2, *vec_out| {
+        vec_out.* = vec_in1.cross(vec_in2);
     }
 }

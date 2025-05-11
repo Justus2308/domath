@@ -10,7 +10,7 @@ pub fn main() !void {
     try runBenchmarks("normalize4", allocator, writer);
     try runBenchmarks("scaleByLen3", allocator, writer);
     try runBenchmarks("multiplyAddNegate2", allocator, writer);
-    try runBenchmarks("crossLerp3", allocator, writer);
+    try runBenchmarks("cross3", allocator, writer);
 }
 
 const candidates = struct {
