@@ -102,33 +102,33 @@ On a M1 MacBook Pro (128-bit SIMD registers):
 ```
 benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995
 -----------------------------------------------------------------------------------------------------------------------------
-domath: normalize4     938      4.924s         5.25ms ± 130.823us     (5.006ms ... 6.294ms)        5.288ms    5.736ms    5.979ms
-zalgebra: normalize4   887      4.98s          5.615ms ± 161.734us    (5.345ms ... 6.876ms)        5.681ms    6.154ms    6.285ms
-zm: normalize4         914      5.015s         5.487ms ± 125.367us    (5.245ms ... 6.127ms)        5.554ms    5.88ms     5.923ms
-zlm: normalize4        820      4.997s         6.094ms ± 145.019us    (5.824ms ... 6.747ms)        6.163ms    6.574ms    6.61ms
+domath: normalize4     3357     4.972s         1.481ms ± 45.508us     (1.365ms ... 1.654ms)        1.5ms      1.54ms     1.558ms
+zalgebra: normalize4   3031     4.999s         1.649ms ± 12.1us       (1.64ms ... 1.849ms)         1.649ms    1.706ms    1.723ms
+zm: normalize4         3187     4.998s         1.568ms ± 10.548us     (1.563ms ... 1.77ms)         1.566ms    1.608ms    1.626ms
+zlm: normalize4        2657     4.984s         1.876ms ± 15.664us     (1.861ms ... 2.054ms)        1.883ms    1.941ms    1.978ms
 benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995
 -----------------------------------------------------------------------------------------------------------------------------
-domath: scaleByLen3    1339     4.989s         3.725ms ± 83.357us     (3.521ms ... 4.293ms)        3.758ms    4.016ms    4.072ms
-zalgebra: scaleByLen3  961      5.049s         5.254ms ± 110.129us    (5.012ms ... 6.084ms)        5.277ms    5.614ms    5.728ms
-zm: scaleByLen3        951      4.967s         5.223ms ± 175.178us    (4.998ms ... 6.455ms)        5.279ms    5.992ms    6.077ms
-zlm: scaleByLen3       1282     4.979s         3.883ms ± 90.251us     (3.727ms ... 4.277ms)        3.924ms    4.193ms    4.2ms
+domath: scaleByLen3    4942     4.996s         1.011ms ± 6.328us      (1ms ... 1.142ms)            1.011ms    1.036ms    1.053ms
+zalgebra: scaleByLen3  3384     4.982s         1.472ms ± 28.244us     (1.429ms ... 1.831ms)        1.497ms    1.526ms    1.536ms
+zm: scaleByLen3        3370     5.036s         1.494ms ± 28.167us     (1.432ms ... 1.594ms)        1.523ms    1.53ms     1.541ms
+zlm: scaleByLen3       4424     5.001s         1.13ms ± 15.566us      (1.112ms ... 1.246ms)        1.14ms     1.168ms    1.181ms
 benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995
 -----------------------------------------------------------------------------------------------------------------------------
-domath: multiplyAddNeg 800      5.081s         6.351ms ± 151.374us    (6.117ms ... 6.939ms)        6.443ms    6.806ms    6.862ms
-zalgebra: multiplyAddN 822      5s             6.083ms ± 147.367us    (5.826ms ... 6.698ms)        6.158ms    6.575ms    6.621ms
-zm: multiplyAddNegate2 823      4.962s         6.029ms ± 145.226us    (5.678ms ... 7.077ms)        6.097ms    6.442ms    6.45ms
-zlm: multiplyAddNegate 838      5.011s         5.979ms ± 132.418us    (5.695ms ... 6.565ms)        6.044ms    6.42ms     6.47ms
+domath: multiplyAddNeg 5045     5.004s         992.062us ± 15.583us   (921.75us ... 1.114ms)       997.458us  1.028ms    1.041ms
+zalgebra: multiplyAddN 5355     4.999s         933.645us ± 17.389us   (916.458us ... 1.362ms)      941.958us  980.959us  996.166us
+zm: multiplyAddNegate2 5372     4.993s         929.514us ± 13.952us   (916.25us ... 1.267ms)       934.208us  971.292us  984.584us
+zlm: multiplyAddNegate 5618     5.004s         890.838us ± 14.141us   (877.209us ... 1.005ms)      895.541us  934.208us  949.166us
 benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995
 -----------------------------------------------------------------------------------------------------------------------------
-domath: cross3         732      5.079s         6.939ms ± 204.984us    (6.593ms ... 8.371ms)        7.021ms    7.681ms    7.968ms
-zalgebra: cross3       550      4.946s         8.994ms ± 234.06us     (8.575ms ... 10.014ms)       9.168ms    9.69ms     9.778ms
-zm: cross3             562      5.028s         8.947ms ± 215.915us    (8.585ms ... 9.919ms)        9.044ms    9.645ms    9.838ms
-zlm: cross3            793      5.009s         6.317ms ± 157.106us    (6.031ms ... 7.477ms)        6.395ms    6.804ms    6.919ms
+domath: cross3         5045     5.014s         993.998us ± 17.183us   (974.375us ... 1.148ms)      999.667us  1.062ms    1.086ms
+zalgebra: cross3       3633     4.992s         1.374ms ± 19.711us     (1.322ms ... 1.446ms)        1.382ms    1.41ms     1.419ms
+zm: cross3             3635     4.998s         1.375ms ± 19.411us     (1.32ms ... 1.444ms)         1.383ms    1.412ms    1.421ms
+zlm: cross3            5430     5.003s         921.455us ± 11.811us   (887.917us ... 984.167us)    930us      949.708us  956.542us
 ```
 
-zalgebra and zm store `@Vector`s directly in memory so I suspect that their bad results for `scaleByLen3` come from the fact that `@alignOf(@Vector(3, f32)) == 16` on this machine (so more memory to load/more cache misses).
+zalgebra and zm store `@Vector`s directly in memory so I suspect that their bad results for `scaleByLen3` and `cross3` come from the fact that `@alignOf(@Vector(3, f32)) == 16` on this machine (so more memory to load/more cache misses).
 
-On a Ryzen 3600X (256-bit SIMD registers):
+On a Ryzen 3600X (256-bit SIMD registers, outdated benchmark with lots of alloc overhead):
 
 ```
 benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995

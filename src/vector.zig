@@ -684,29 +684,20 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
         pub const Accumulator = struct {
             buffer: Slicable,
 
-            const Output = union(enum) {
-                scalars: *Scalars,
-                vectors: [len]*Scalars,
-            };
+            // NOTE: I am not quite sure why Zig is ok with the `extra_args` tuples being
+            // annotated `noalias` (I suspect that `@call` destructures them into multiple
+            // args and the check whether each `noalias` arg is a pointer only occurs after
+            // that?) but it works for now so I will keep it.
 
             pub fn begin(
                 comptime op: Op,
-                noalias in: op.kind.in,
+                noalias in: *const [len]*const Scalars,
                 noalias extra_args: op.kind.extra,
             ) Accumulator {
-                comptime assert(op.kind.out != *Scalars);
+                comptime verifyOpIsChainable(op);
                 var accu = Accumulator{ .buffer = undefined };
-                const out_raw: Output = switch (op.kind.out) {
-                    *Scalars => .{ .scalars = &accu.buffer[0] },
-                    *const [len]*Scalars => .{ .vectors = slices(&accu.buffer) },
-                    else => comptime unreachable,
-                };
-                const out = switch (op.kind.out) {
-                    *Scalars => out_raw.scalars,
-                    *const [len]*Scalars => &out_raw.vectors,
-                    else => comptime unreachable,
-                };
-                op.call(in, extra_args, out);
+                const out = slices(&accu.buffer);
+                op.call(in, extra_args, &out);
                 return accu;
             }
 
@@ -715,21 +706,11 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                 comptime op: Op,
                 noalias extra_args: op.kind.extra,
             ) void {
-                comptime assert(op.kind.out != *Scalars);
+                comptime verifyOpIsChainable(op);
                 const in = slices(&accu.buffer);
-                // TODO: find prettier solution
                 var tmp: Slicable = undefined;
-                const out_raw: Output = switch (op.kind.out) {
-                    *Scalars => .{ .scalars = &tmp[0] },
-                    *const [len]*Scalars => .{ .vectors = slices(&tmp) },
-                    else => comptime unreachable,
-                };
-                const out = switch (op.kind.out) {
-                    *Scalars => out_raw.scalars,
-                    *const [len]*Scalars => &out_raw.vectors,
-                    else => comptime unreachable,
-                };
-                op.call(&in, extra_args, out);
+                const out = slices(&tmp);
+                op.call(&in, extra_args, &out);
                 accu.buffer = tmp;
             }
 
@@ -749,6 +730,12 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                 const out = casted(T).slices(&casted_accu.buffer);
                 self.cast(T, &in, &out);
                 return casted_accu;
+            }
+
+            fn verifyOpIsChainable(comptime op: Op) void {
+                if (op.kind.out != *const [len]*Scalars) {
+                    @compileError("Only vector(+)-to-vector operations are chainable");
+                }
             }
 
             pub const Op = struct {
@@ -843,6 +830,10 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                     .kind = .v_to_v,
                     .fn_name = "cos",
                 };
+                pub const abs = Op{
+                    .kind = .v_to_v,
+                    .fn_name = "abs",
+                };
                 pub const move_towards = Op{
                     .kind = .vws_to_v,
                     .fn_name = "moveTowards",
@@ -862,48 +853,45 @@ pub fn namespaceWithConfig(comptime len: comptime_int, comptime Element: type, c
                 };
 
                 const Kind = struct {
-                    in: type,
                     extra: type,
                     out: type,
 
                     pub const v_to_v = Kind{
-                        .in = *const [len]*const Scalars,
                         .extra = std.meta.Tuple(&.{}),
                         .out = *const [len]*Scalars,
                     };
                     pub const v_to_s = Kind{
-                        .in = *const [len]*const Scalars,
                         .extra = std.meta.Tuple(&.{}),
                         .out = *Scalars,
                     };
                     pub const vw_to_v = Kind{
-                        .in = *const [len]*const Scalars,
                         .extra = std.meta.Tuple(&.{*const [len]*const Scalars}),
                         .out = *const [len]*Scalars,
                     };
                     pub const vw_to_s = Kind{
-                        .in = *const [len]*const Scalars,
                         .extra = std.meta.Tuple(&.{*const [len]*const Scalars}),
                         .out = *Scalars,
                     };
                     pub const vs_to_v = Kind{
-                        .in = *const [len]*const Scalars,
                         .extra = std.meta.Tuple(&.{*const Scalars}),
                         .out = *const [len]*Scalars,
                     };
                     pub const vws_to_v = Kind{
-                        .in = *const [len]*const Scalars,
                         .extra = std.meta.Tuple(&.{ *const [len]*const Scalars, *const Scalars }),
                         .out = *const [len]*Scalars,
                     };
                     pub const uvw_to_v = Kind{
-                        .in = *const [len]*const Scalars,
                         .extra = std.meta.Tuple(&.{ *const [len]*const Scalars, *const [len]*const Scalars }),
                         .out = *const [len]*Scalars,
                     };
                 };
 
-                fn call(comptime op: Op, in: op.kind.in, extra_args: op.kind.extra, out: op.kind.out) void {
+                inline fn call(
+                    comptime op: Op,
+                    noalias in: *const [len]*const Scalars,
+                    noalias extra_args: op.kind.extra,
+                    noalias out: op.kind.out,
+                ) void {
                     @call(.auto, @field(self, op.fn_name), .{in} ++ extra_args ++ .{out});
                 }
             };
